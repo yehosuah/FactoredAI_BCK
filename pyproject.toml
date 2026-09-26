@@ -1,0 +1,32 @@
+[project]
+name = "factored-bck"
+version = "0.1.0"
+description = "Base HTTP del backend independiente de Factored AI"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "pydantic-settings>=2.8,<3",
+    "uvicorn>=0.34,<1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["httpx2>=2,<3", "pytest>=8,<10", "ruff>=0.12,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factored_bck"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

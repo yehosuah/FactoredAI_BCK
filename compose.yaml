@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:${BCK_PORT:-8000}:8000"
+    environment:
+      BCK_APP_NAME: "${BCK_APP_NAME:-Factored AI Backend}"
+      BCK_ENVIRONMENT: "${BCK_ENVIRONMENT:-development}"
+      BCK_ENABLE_DOCS: "${BCK_ENABLE_DOCS:-true}"
