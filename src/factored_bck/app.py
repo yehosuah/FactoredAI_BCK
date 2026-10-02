@@ -1,6 +1,7 @@
 """API mínima: salud, configuración y errores con identificador de solicitud."""
 
 import logging
+from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import Literal
 from uuid import uuid4
@@ -11,7 +12,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
+from factored_bck.routes import router
 from factored_bck.settings import Settings
+from factored_bck.store import Store
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +36,16 @@ def error_response(
     )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, store=None) -> FastAPI:
     config = settings if settings is not None else Settings()
+    data_store = store if store is not None else Store(config) if config.data_enabled else None
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if data_store is not None:
+            data_store.initialize()
+        yield
+
     app_version = version("factored-bck")
     app = FastAPI(
         title=config.app_name,
@@ -43,8 +54,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url="/docs" if config.enable_docs else None,
         redoc_url=None,
         openapi_url="/openapi.json" if config.enable_docs else None,
+        lifespan=lifespan,
     )
     app.state.settings = config
+    app.state.store = data_store
+    if data_store is not None:
+        app.include_router(router)
 
     @app.middleware("http")
     async def identify_request(request: Request, call_next):
@@ -87,7 +102,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/ready", response_model=HealthResponse, tags=["health"])
     async def ready():
-        # Esta base no tiene dependencias externas. No afirma disponibilidad del ETL.
+        if data_store is not None:
+            try:
+                data_store.ready()
+            except Exception:
+                raise HTTPException(status_code=503) from None
         return HealthResponse(status="ready", service=config.app_name, version=app_version)
 
     return app

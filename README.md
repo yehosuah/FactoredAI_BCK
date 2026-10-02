@@ -7,9 +7,11 @@ Repositorio independiente del backend (BCK). El ETL se desarrolla en otro reposi
 extrae, transforma y entrega datos; el backend consume esas entregas mediante contratos acordados.
 Cada repositorio mantiene su propio código, entorno, pruebas, tickets y decisiones.
 
-La base ejecutable usa Python 3.13, FastAPI y uv, con entorno propio. Incluye salud,
-configuración y manejo de errores; todavía no implementa un flujo bancario, autenticación,
-persistencia ni conexiones al ETL. El entorno del ETL no es un requisito de este BCK.
+El backend usa Python 3.13, FastAPI y uv, con entorno propio. Incluye salud,
+configuración y manejo de errores, y un prototipo autenticado de soporte de tarjetas
+que consume entregas versionadas en PostgreSQL. Las acciones son simuladas y persisten
+en un esquema propio; una actualización del ETL no reemplaza su estado. El entorno
+del ETL no es un requisito de este BCK.
 
 ## Ejecución local
 
@@ -79,9 +81,10 @@ Desactivar documentación requiere `BCK_ENABLE_DOCS=false`.
 | `GET /health/ready` | HTTP 200: base inicial disponible, `status: ready` |
 | `GET /openapi.json` | Esquema de la API, cuando la documentación está habilitada |
 
-Las respuestas de salud incluyen `service` y `version`. No hay dependencias externas:
-`ready` no acredita disponibilidad, frescura ni calidad de los datos del ETL.
-Al integrar una dependencia requerida se deberá ampliar readiness y devolver 503 si no está disponible.
+Las respuestas de salud incluyen `service` y `version`. Con `BCK_DATA_ENABLED=false`
+se comprueba únicamente la base HTTP. Con datos habilitados, `ready` comprueba la
+entrega PostgreSQL y su versión de contrato; devuelve 503 si falta o es incompatible.
+La frescura y el resultado de la ejecución se consultan en `/operations/etl`.
 
 Cada respuesta lleva un `X-Request-ID` generado por el servidor. Los errores HTTP, de validación
 y no controlados tienen la forma:
@@ -110,6 +113,50 @@ Las pruebas verifican salud, configuración y precedencia de variables, rechazo 
 inválida, errores 404/405/422/500, correlación por solicitud y control de documentación.
 Las rutas que fuerzan errores existen solo en pruebas, no en la aplicación ejecutable.
 
+## Integración de soporte de tarjetas
+
+La API de datos se habilita con `BCK_DATA_ENABLED=true`. Configura `BCK_DB_HOST`,
+`BCK_DB_PORT`, `BCK_DB_NAME`, `BCK_DB_USER` y `BCK_DB_PASSWORD_FILE` con el rol propio
+del backend. La base debe contener el esquema `simulator` propiedad del backend y
+una entrega completa aceptada bajo el contrato `card-support-etl-v1` en `bank`.
+Readiness devuelve 503 hasta que haya una entrega disponible. La base HTTP sola
+conserva sus rutas de salud cuando `BCK_DATA_ENABLED=false`.
+
+`BCK_DEMO_PASSWORD_FILE` crea un usuario `demo` y tarjetas ficticias identificadas
+como `team_synthetic`; no activa acceso a clientes del organizador. Para crear una
+cuenta de prueba asociada a un cliente de la entrega aceptada:
+
+```bash
+uv run --locked factored-provision --username <test-user> \
+  --customer-id <accepted-customer> --password-file /private/path/test-password
+```
+
+El archivo debe contener una contraseña de al menos 12 caracteres. Nunca uses una
+contraseña como argumento ni registres tokens. El aprovisionamiento es administrativo
+local; no hay registro público basado únicamente en un ID de cliente.
+
+| Ruta | Comportamiento |
+| --- | --- |
+| `POST /auth/login`, `POST /auth/logout` | Sesión opaca, expirable y revocable de prueba |
+| `GET /me`, `GET /me/cards`, `GET /me/cards/{id}` | Identidad de sesión y tarjetas del cliente autenticado |
+| `GET /me/cards/{id}/movements` | Movimientos históricos propios, con límite y fecha de proceso |
+| `POST /me/cards/{id}/actions` | `block`, `pause`, `reactivate`, `activate`, `replacement`, `unrecognized-charge` |
+| `GET /me/handoff` | Evidencia de acciones simuladas confirmadas y limitaciones |
+| `GET /operations/etl` | Estado agregado de la entrega y ejecución ETL |
+
+Toda acción requiere `Idempotency-Key`. Repetir la misma solicitud devuelve el
+mismo resultado; reutilizar la clave para otra solicitud devuelve 409. El backend
+verifica propiedad, elegibilidad y resultado dentro de una transacción. Un bloqueo
+por pérdida/robo no permite reactivación automática; reemplazo y cargo desconocido
+solo registran solicitudes. No ejecuta pagos, reembolsos, adjudicación de fraude,
+emisión ni envío. Los valores del organizador se presentan como históricos y los
+números de producto se enmascaran. El servicio conversacional sigue siendo consumidor
+de esta API; no se integra un modelo externo en esta implementación.
+
+Este checkout tiene su propio Dockerfile y Compose para la base HTTP. El Compose
+integrado se encuentra en la raíz del workspace ETL; construye este repositorio
+como contexto independiente y configura PostgreSQL y secretos en ejecución.
+
 ```text
 src/factored_bck/  Aplicación y configuración
 tests/            Pruebas del BCK
@@ -123,8 +170,8 @@ docs/adr/         Decisiones de arquitectura
 ```
 
 La carpeta preexistente `Untitled/` no participa en instalación, pruebas o construcción Docker.
-La implementación y la integración con el ETL se acuerdan como siguiente trabajo, mediante
-contratos de datos independientes de la ubicación de ambos checkouts.
+La integración consume el contrato de datos versionado, independiente de la ubicación
+de ambos checkouts.
 
 ## Configuración de desarrollo
 
