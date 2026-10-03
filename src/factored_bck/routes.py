@@ -3,9 +3,11 @@
 from datetime import date
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
+
+from factored_bck.metrics import METRICS_ROUTE
 
 router = APIRouter()
 session_scheme = HTTPBearer(auto_error=False, scheme_name="TestSession")
@@ -114,3 +116,31 @@ def handoff(principal: Principal, db: DB):
 @router.get("/operations/etl", tags=["operations"])
 def etl_status(_principal: Principal, db: DB):
     return db.etl_status()
+
+
+@router.get(METRICS_ROUTE, tags=["operations"])
+def metrics(request: Request, response: Response, _principal: Principal, db: DB):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        http = request.app.state.metrics.snapshot()
+    except Exception:
+        http = {"status": "unavailable", "reason": "collection_unavailable"}
+    try:
+        actions = db.action_metrics()
+    except Exception:
+        actions = {"status": "unavailable", "reason": "aggregation_unavailable"}
+    return {
+        "http": http,
+        "card_actions": actions,
+        "limitations": [
+            "HTTP metrics are best-effort, per application instance and reset on restart",
+            "HTTP counters and bounded recent latency samples have different windows",
+            "Latency ends at response headers; body streaming and client network are excluded",
+            "Action counts cover all customers and all retained committed evidence",
+            "Idempotent replays do not add committed actions",
+            "Failed or rejected action attempts are not persisted; action failures are unknown",
+            "HTTP success and committed simulated actions do not establish safe resolution",
+            "No refund, issuance, shipping or fraud decision is asserted",
+            "HTTP and database snapshots are not atomic with each other",
+        ],
+    }

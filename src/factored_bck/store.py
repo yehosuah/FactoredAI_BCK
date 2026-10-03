@@ -378,6 +378,48 @@ class Store:
                 ],
             }
 
+    def action_metrics(self):
+        """Aggregate committed evidence only; never load payloads or identifying fields."""
+        with self.connect() as pg:
+            pg.execute("SET TRANSACTION READ ONLY")
+            pg.execute("SET LOCAL statement_timeout = '2s'")
+            rows = pg.execute(
+                "SELECT CASE WHEN result->>'action'=ANY(%s) THEN result->>'action' "
+                "ELSE 'other' END AS action, "
+                "CASE WHEN result->>'outcome'=ANY(%s) THEN result->>'outcome' "
+                "ELSE 'other' END AS outcome, count(*) AS committed_count, "
+                "count(*) FILTER (WHERE result->>'status'='succeeded') AS succeeded_count "
+                "FROM simulator.actions GROUP BY 1,2 ORDER BY 1,2",
+                (
+                    [
+                        "block",
+                        "pause",
+                        "reactivate",
+                        "activate",
+                        "replacement",
+                        "unrecognized-charge",
+                    ],
+                    [
+                        "state_change_verified",
+                        "replacement_request_registered",
+                        "request_registered_for_human_review",
+                    ],
+                ),
+            ).fetchall()
+        return {
+            "status": "available",
+            "scope": "all_customers",
+            "source": "simulator.actions",
+            "window": {
+                "kind": "all_retained_committed_rows",
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+            "total_committed": sum(row["committed_count"] for row in rows),
+            "total_succeeded": sum(row["succeeded_count"] for row in rows),
+            "total_failures": None,
+            "actions": rows,
+        }
+
     def etl_status(self):
         with self.connect() as pg:
             release = pg.execute(

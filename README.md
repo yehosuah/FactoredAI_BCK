@@ -143,6 +143,7 @@ local; no hay registro público basado únicamente en un ID de cliente.
 | `POST /me/cards/{id}/actions` | `block`, `pause`, `reactivate`, `activate`, `replacement`, `unrecognized-charge` |
 | `GET /me/handoff` | Evidencia de acciones simuladas confirmadas y limitaciones |
 | `GET /operations/etl` | Estado agregado de la entrega y ejecución ETL |
+| `GET /operations/metrics` | Métricas HTTP y conteos agregados de acciones confirmadas; requiere sesión |
 
 Toda acción requiere `Idempotency-Key`. Repetir la misma solicitud devuelve el
 mismo resultado; reutilizar la clave para otra solicitud devuelve 409. El backend
@@ -156,6 +157,22 @@ de esta API; no se integra un modelo externo en esta implementación.
 Este checkout tiene su propio Dockerfile y Compose para la base HTTP. El Compose
 integrado se encuentra en la raíz del workspace ETL; construye este repositorio
 como contexto independiente y configura PostgreSQL y secretos en ejecución.
+
+## Observabilidad operativa
+
+`GET /operations/metrics` separa `http`, `card_actions` y `limitations`. Cualquier
+sesión válida puede consultar estos agregados globales, como en `/operations/etl`.
+HTTP incluye conteos por método/plantilla y clase de estado, fallos 4xx/5xx, tasa
+de error y p50/p95 en milisegundos de hasta 1024 muestras recientes por grupo.
+Los contadores duran la vida de la instancia de aplicación; no se comparten entre
+workers. Las métricas excluyen su propia ruta y no almacenan cuerpos, tokens,
+URLs crudas ni identificadores. Un fallo del colector no altera la respuesta bancaria.
+
+Las acciones se agregan desde la evidencia ya confirmada en PostgreSQL, sin duplicarla.
+Los replays idempotentes no aumentan su conteo; los intentos fallidos no están
+persistidos y su total se informa como `null`. Éxito HTTP o simulado no implica
+resolución segura. Consulta [mediciones, ventanas, privacidad y pruebas](docs/observability.md)
+para interpretar la respuesta y las limitaciones de esta implementación.
 
 ```text
 src/factored_bck/  Aplicación y configuración
