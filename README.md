@@ -174,6 +174,17 @@ persistidos y su total se informa como `null`. Éxito HTTP o simulado no implica
 resolución segura. Consulta [mediciones, ventanas, privacidad y pruebas](docs/observability.md)
 para interpretar la respuesta y las limitaciones de esta implementación.
 
+## Herramientas internas para un futuro orquestador
+
+`app.state.tools` ofrece un `ToolDispatcher` interno cuando está habilitado el Store.
+Su catálogo fijo contiene `get_cards`, `get_card`, `get_movements`, `block_card`,
+`pause_card`, `reactivate_card`, `activate_card`, `request_replacement` y
+`register_unrecognized_charge`. Revalida la sesión en cada llamada, rechaza
+`customer_id` en argumentos y reutiliza la propiedad, idempotencia y evidencia del
+Store. Las acciones solo devuelven éxito verificado tras recibir evidencia válida
+del backend. No se añade un endpoint HTTP de herramientas ni un proveedor LLM.
+Ver [contrato, esquemas, errores y responsabilidades del orquestador](docs/backend-tools.md).
+
 ```text
 src/factored_bck/  Aplicación y configuración
 tests/            Pruebas del BCK

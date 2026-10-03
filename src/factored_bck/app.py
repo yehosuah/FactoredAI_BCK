@@ -16,6 +16,7 @@ from factored_bck.metrics import HttpMetrics
 from factored_bck.routes import router
 from factored_bck.settings import Settings
 from factored_bck.store import Store
+from factored_bck.tools import ToolDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None, store=None, metrics=None) -> Fa
     )
     app.state.settings = config
     app.state.store = data_store
+    app.state.tools = ToolDispatcher(data_store) if data_store is not None else None
     app.state.metrics = metrics if metrics is not None else HttpMetrics()
     if data_store is not None:
         app.include_router(router)

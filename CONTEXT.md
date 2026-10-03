@@ -13,3 +13,4 @@
 | Sesión de prueba | Identidad autenticada, expirable y revocable asociada a un cliente; conocer su ID no concede acceso. |
 | Acción simulada confirmada | Resultado de una herramienta de prueba confirmado y conservado como evidencia; no afirma ejecución bancaria ni resolución del problema del cliente. |
 | Fallo HTTP operativo | Respuesta del backend con estado 4xx o 5xx; no equivale a una acción bancaria fallida ni determina su resolución. |
+| Herramienta de soporte | Operación explícita de lectura o acción simulada, limitada al cliente autenticado; una intención solicitada no es evidencia de ejecución. |
