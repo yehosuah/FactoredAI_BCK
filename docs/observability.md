@@ -51,11 +51,21 @@ y calculan percentiles fuera del lock.
 
 ## Endpoint y alcance autorizado
 
-`GET /operations/metrics` usa la misma sesión bearer expirable y revocable que
-`/operations/etl`. Según la decisión del usuario, cualquier sesión válida puede
-consultar los agregados HTTP y de acciones **de todos los clientes**. No hay un
-rol de operador adicional. No se admiten filtros por cliente ni se devuelven IDs.
-La ruta solo existe cuando está habilitada la capa de datos/autenticación.
+`GET /operations/metrics` requiere una credencial bearer de operador independiente,
+configurada por el host en `BCK_METRICS_TOKEN_FILE`. Las sesiones de clientes/agentes
+no conceden acceso a los agregados **de todos los clientes**. Esto corrige la
+exposición entre clientes identificada por revisión de seguridad; sustituye el
+alcance de autenticación de la implementación original. La ruta solo existe con
+la capa de datos; sin secreto de operador configurado devuelve 401 sin recolectar.
+
+El secreto debe tener 32–200 caracteres ASCII (`A-Z`, `a-z`, `0-9`, `_`, `-`), con
+un salto de línea final opcional. Genera un valor independiente usando
+`secrets.token_urlsafe(32)` y guárdalo en un archivo/montaje privado del operador.
+Se relee en cada consulta y se comparan sus hashes mediante comparación constante:
+rotar el archivo revoca inmediatamente el valor anterior, sin reiniciar ni afectar
+sesiones de clientes. Archivo ausente/inválido devuelve 503 sin recolectar. No hay
+secreto por defecto ni token compartido con clientes, agentes o herramientas del
+modelo; no se añade un sistema IAM empresarial.
 
 La respuesta lleva `Cache-Control: no-store` y el `X-Request-ID` existente.
 Su cuerpo separa tres campos:
@@ -78,7 +88,7 @@ de acciones, `card_actions` contiene solo
 `{"status":"unavailable","reason":"aggregation_unavailable"}`. El endpoint conserva
 HTTP 200 con las secciones disponibles; una sección ausente no se sustituye por
 ceros. Autenticación ocurre antes de estas lecturas y sigue fallando normalmente
-si la sesión no es válida o no se puede verificar en PostgreSQL.
+si la credencial de operador no es válida o no se puede leer de forma segura.
 
 ## Acciones confirmadas frente a tráfico HTTP
 

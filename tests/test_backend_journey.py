@@ -14,7 +14,10 @@ from factored_bck.store import Store
 from factored_bck.tools import ExecutionContext
 
 
-def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_backend):
+def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(
+    tool_backend, operator_credentials
+):
+    operator_settings, operator_headers, _ = operator_credentials
     admin, _, _ = tool_backend
     with admin.connect() as pg:
         pg.execute("CREATE ROLE backend_api LOGIN")
@@ -86,7 +89,7 @@ def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_b
     assert store.ready()["release_id"] == "test-release"
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         handoffs.check_configuration()
-    with TestClient(create_app(store.settings, store=store)) as client:
+    with TestClient(create_app(operator_settings, store=store)) as client:
         assert client.get("/health/live").status_code == 200
         assert client.get("/health/ready").status_code == 503
     with admin.connect() as pg:
@@ -95,7 +98,7 @@ def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_b
     handoffs.check_configuration()
     handoffs.agents.provision("agent-login", "agent-1", "team-agent-password")
 
-    with TestClient(create_app(store.settings, store=store)) as client:
+    with TestClient(create_app(operator_settings, store=store)) as client:
         response = client.post(
             "/auth/login", json={"username": "user-1", "password": "test-password"}
         )
@@ -181,7 +184,8 @@ def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_b
         path = "/agent/handoffs/" + case.json()["handoff_id"]
         assert client.post(path + "/accept", headers=agent_headers).json()["status"] == "accepted"
         assert client.post(path + "/resolve", headers=agent_headers).json()["status"] == "resolved"
-        metrics = client.get("/operations/metrics", headers=headers).json()
+        assert client.get("/operations/metrics", headers=headers).status_code == 401
+        metrics = client.get("/operations/metrics", headers=operator_headers).json()
         assert metrics["card_actions"]["total_committed"] == 6
         assert metrics["handoffs"]["total_handoffs"] == 1
         assert client.get("/operations/etl", headers=headers).status_code == 200

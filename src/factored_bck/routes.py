@@ -1,5 +1,7 @@
 """Authenticated card-support APIs; customer scope comes exclusively from the session."""
 
+import hmac
+import re
 from datetime import date
 from typing import Annotated, Any
 
@@ -10,9 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from factored_bck.confirmations import ActionParameters as Action
 from factored_bck.confirmations import CardCommand
 from factored_bck.metrics import METRICS_ROUTE
+from factored_bck.security import token_digest
 
 router = APIRouter()
 session_scheme = HTTPBearer(auto_error=False, scheme_name="TestSession")
+operator_scheme = HTTPBearer(auto_error=False, scheme_name="MetricsOperator")
 
 
 class Login(BaseModel):
@@ -45,6 +49,31 @@ def user(db: DB, token: Token):
 
 
 Principal = Annotated[dict, Depends(user)]
+
+
+def metrics_operator(
+    request: Request,
+    authorization: Annotated[HTTPAuthorizationCredentials | None, Depends(operator_scheme)],
+):
+    if not authorization or not 1 <= len(authorization.credentials) <= 200:
+        raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
+    path = request.app.state.settings.metrics_token_file
+    if path is None:
+        raise HTTPException(401)
+    try:
+        # Bound reads; reread on every request so rotation/removal revokes immediately.
+        with path.open("rb") as source:
+            raw = source.read(202)
+        expected = raw.decode("ascii").removesuffix("\n")
+        if len(raw) > 201 or not re.fullmatch(r"[A-Za-z0-9_-]{32,200}", expected):
+            raise ValueError("invalid_operator_credential")
+    except (OSError, UnicodeError, ValueError):
+        raise HTTPException(503) from None
+    if not hmac.compare_digest(token_digest(authorization.credentials), token_digest(expected)):
+        raise HTTPException(401)
+
+
+MetricsOperator = Annotated[None, Depends(metrics_operator)]
 
 
 @router.post("/auth/login", tags=["test authentication"])
@@ -119,7 +148,7 @@ def etl_status(_principal: Principal, db: DB):
 
 
 @router.get(METRICS_ROUTE, tags=["operations"])
-def metrics(request: Request, response: Response, _principal: Principal, db: DB):
+def metrics(request: Request, response: Response, _operator: MetricsOperator, db: DB):
     response.headers["Cache-Control"] = "no-store"
     try:
         http = request.app.state.metrics.snapshot()

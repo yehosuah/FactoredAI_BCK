@@ -13,7 +13,6 @@ from psycopg.types.json import Jsonb
 
 from factored_bck.app import create_app
 from factored_bck.security import password_hash
-from factored_bck.settings import Settings
 
 
 def insert_evidence(pg, number, action, outcome, status="succeeded"):
@@ -117,19 +116,23 @@ def test_real_action_replays_and_rejections_do_not_inflate_committed_counts(stor
     assert "private" not in json.dumps(result)
 
 
-def test_endpoint_with_real_session_expiry_and_revocation(store):
+def test_operator_endpoint_denies_real_customer_sessions_before_and_after_revocation(
+    store, operator_credentials
+):
+    settings, operator_headers, _ = operator_credentials
     with store.connect() as pg:
         pg.execute(
             "INSERT INTO simulator.users VALUES(%s,%s,%s,%s)",
             ("test-user", password_hash("test-password"), "test-customer", "team_synthetic"),
         )
-    with TestClient(create_app(Settings(_env_file=None), store=store)) as client:
+    with TestClient(create_app(settings, store=store)) as client:
         login = client.post(
             "/auth/login", json={"username": "test-user", "password": "test-password"}
         )
         token = login.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
-        result = client.get("/operations/metrics", headers=headers)
+        assert client.get("/operations/metrics", headers=headers).status_code == 401
+        result = client.get("/operations/metrics", headers=operator_headers)
         assert result.status_code == 200
         assert result.json()["card_actions"]["total_committed"] == 0
         assert token not in result.text
@@ -145,16 +148,18 @@ def test_endpoint_with_real_session_expiry_and_revocation(store):
         assert client.get("/operations/metrics", headers=headers).status_code == 401
 
 
-def test_action_query_timeout_produces_unavailable_metrics(store, monkeypatch):
+def test_action_query_timeout_produces_unavailable_metrics(
+    store, monkeypatch, operator_credentials
+):
+    settings, operator_headers, _ = operator_credentials
     # Lock the disposable table: prove the query timeout, not a wall-clock assertion.
     with store.connect() as blocker:
         blocker.execute("LOCK TABLE simulator.actions IN ACCESS EXCLUSIVE MODE")
-        app = create_app(Settings(_env_file=None), store=store)
-        monkeypatch.setattr(store, "session", lambda _token: {"customer_id": "test-customer"})
+        app = create_app(settings, store=store)
         # Initialization needs table locks too; the schema was already initialized above.
         monkeypatch.setattr(store, "initialize", lambda: None)
         with TestClient(app) as client:
-            result = client.get("/operations/metrics", headers={"Authorization": "Bearer fixture"})
+            result = client.get("/operations/metrics", headers=operator_headers)
         assert result.status_code == 200
         assert result.json()["card_actions"] == {
             "status": "unavailable",

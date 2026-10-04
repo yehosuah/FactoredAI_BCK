@@ -272,8 +272,10 @@ def test_concurrent_idempotency_one_case_and_lifecycle_race(backend):
     assert sorted(outcomes) == [200, 409]
 
 
-def test_routing_queue_reroute_and_persistent_metrics(backend):
+def test_routing_queue_reroute_and_persistent_metrics(backend, operator_credentials):
+    _, operator_headers, operator_file = operator_credentials
     store, service, client, customers, _ = backend
+    client.app.state.settings.metrics_token_file = operator_file
     queued = create(backend, severity="critical")
     assert queued["queue"] == "critical_review" and queued["status"] == "queued"
     assert queued["assigned_agent_id"] is None and queued["manual_routing_required"]
@@ -283,7 +285,8 @@ def test_routing_queue_reroute_and_persistent_metrics(backend):
     store.settings.critical_senior_fallback_reasons = ["card_support"]
     routed = service.reroute(queued["handoff_id"])
     assert routed["status"] == "assigned" and routed["routing"]["fallback_used"]
-    body = client.get("/operations/metrics", headers=auth(customers[0])).json()["handoffs"]
+    assert client.get("/operations/metrics", headers=auth(customers[0])).status_code == 401
+    body = client.get("/operations/metrics", headers=operator_headers).json()["handoffs"]
     assert body["total_handoffs"] == body["assigned"] == body["fallback_assignments"] == 1
     assert body["unassigned"] == body["critical_review"] == 0
     assert body["by_severity"]["critical"] == body["by_required_level"]["Specialist"] == 1
@@ -303,8 +306,12 @@ def test_no_provisioned_accounts_and_release_is_pinned(backend):
     assert service.get(customers[0], case["handoff_id"]) == case
 
 
-def test_creation_rollback_and_unavailable_metrics_never_claim_transfer(backend, caplog):
+def test_creation_rollback_and_unavailable_metrics_never_claim_transfer(
+    backend, caplog, operator_credentials
+):
+    _, operator_headers, operator_file = operator_credentials
     store, service, client, customers, _ = backend
+    client.app.state.settings.metrics_token_file = operator_file
     # Fail after INSERT (deferred commit constraint trigger), not just before routing.
     with store.connect() as pg:
         pg.execute(
@@ -329,7 +336,7 @@ def test_creation_rollback_and_unavailable_metrics_never_claim_transfer(backend,
     assert "private-database-error" not in response.text + caplog.text
     with store.connect() as pg:
         pg.execute("DROP TABLE simulator.handoffs CASCADE")
-    response = client.get("/operations/metrics", headers=auth(customers[0]))
+    response = client.get("/operations/metrics", headers=operator_headers)
     assert response.json()["handoffs"] == {
         "status": "unavailable",
         "reason": "aggregation_unavailable",

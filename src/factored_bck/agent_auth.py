@@ -18,12 +18,12 @@ class AgentAuth:
     def __init__(self, store):
         self.store = store
 
-    def _eligible(self, pg, agent_id):
+    def _eligible(self, pg, agent_id, *, pin=False):
         return (
             pg.execute(
                 "SELECT agent_id FROM bank.service_agents WHERE release_id=%s AND agent_id=%s "
                 "AND agent_status='Active' AND agent_type IN ('Digital','Hybrid')",
-                (self.store._current(pg), agent_id),
+                (self.store._current(pg, pin=pin), agent_id),
             ).fetchone()
             is not None
         )
@@ -32,7 +32,7 @@ class AgentAuth:
         if not 1 <= len(username) <= 100 or not 12 <= len(password) <= 200:
             raise ValueError("invalid_agent_credentials")
         with self.store.connect() as pg:
-            if not self._eligible(pg, agent_id):
+            if not self._eligible(pg, agent_id, pin=True):
                 raise ValueError("agent_not_eligible_in_accepted_release")
             pg.execute(
                 "INSERT INTO simulator.agent_users(username,password_hash,agent_id) "
@@ -55,7 +55,7 @@ class AgentAuth:
             if not valid:
                 pg.commit()
                 raise HTTPException(401)
-            if not self._eligible(pg, account["agent_id"]):
+            if not self._eligible(pg, account["agent_id"], pin=True):
                 pg.commit()
                 raise HTTPException(401)
             token = secrets.token_urlsafe(32)

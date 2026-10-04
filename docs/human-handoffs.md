@@ -27,6 +27,12 @@ and is no longer used for admission. Agent session use rechecks enabled account,
 membership, Active snapshot status and Digital/Hybrid type. These are simulator
 credentials, not enterprise IAM or proof of real employment.
 
+Agent provisioning and successful login hold the shared publisher transaction lock
+from accepted-source eligibility through account/session commit. In-flight
+publication returns 503 / Retry-After: 1 without committing credentials. Ordinary
+session reads remain fresh source checks; subsequent accepted-source ineligibility
+still denies session use.
+
 `handoffs` stores customer scope and creating username from authentication,
 canonical triage, original source release, assignment, lifecycle timestamps,
 routing explanation and separate context/evidence JSON. Customer/agent responses
@@ -194,7 +200,9 @@ and assignment atomically; original creation release and evidence remain unchang
 of accepted/assigned work if an agent later becomes inactive; operator workflow for
 reassignment and human review remains a limitation, not an unsafe automatic fallback.
 
-`GET /operations/metrics` adds `handoffs`, available to existing customer sessions.
+`GET /operations/metrics` adds `handoffs`, available only through the separate
+host-controlled operator credential (`BCK_METRICS_TOKEN_FILE`). Customer/agent
+sessions cannot read these global counts.
 It includes service-wide `total_handoffs`, `assigned`, `unassigned`, `by_severity`,
 `by_reason`, `by_required_level`, `fallback_assignments`, `critical_review`.
 Counts span retained persisted cases; assigned/unassigned refers to assignment

@@ -118,3 +118,16 @@ def tool_backend(store):
             )
     token = store.login("user-1", "test-password", "local-test")["access_token"]
     return store, ToolDispatcher(store), ExecutionContext(session_token=token)
+
+
+@pytest.fixture
+def operator_credentials(tmp_path):
+    token = "synthetic-local-operator-" + "z" * 40
+    path = tmp_path / "operator-secret"
+    path.write_text(token + "\n")
+    path.chmod(0o600)
+    return (
+        Settings(_env_file=None, metrics_token_file=path),
+        {"Authorization": "Bearer " + token},
+        path,
+    )

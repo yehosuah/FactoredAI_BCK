@@ -200,7 +200,7 @@ class OperationsStore:
         {"Authorization": "Bearer " + "x" * 201},
     ],
 )
-def test_metrics_requires_session_before_collecting_aggregates(headers):
+def test_metrics_requires_operator_before_collecting_aggregates(headers):
     store = OperationsStore()
     metrics = HttpMetrics()
     app = create_app(Settings(_env_file=None), store=store, metrics=metrics)
@@ -211,15 +211,16 @@ def test_metrics_requires_session_before_collecting_aggregates(headers):
     assert metrics.snapshot()["total_requests"] == 0
 
 
-def test_endpoint_separates_metrics_and_polling_does_not_count_itself():
+def test_endpoint_separates_metrics_and_polling_does_not_count_itself(operator_credentials):
+    settings, operator_headers, _ = operator_credentials
     metrics = registry_with_ticks(0, 0.125, 1, 2, 3, 4, 5)
-    app = create_app(Settings(_env_file=None), store=OperationsStore(), metrics=metrics)
+    app = create_app(settings, store=OperationsStore(), metrics=metrics)
     with TestClient(app) as client:
         client.get("/health/live")
         for _ in range(5):
             response = client.get(
                 "/operations/metrics?private=secret-query",
-                headers={"Authorization": "Bearer secret-session"},
+                headers=operator_headers,
             )
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-store"
@@ -236,8 +237,9 @@ def test_endpoint_separates_metrics_and_polling_does_not_count_itself():
 
 @pytest.mark.parametrize("broken_section", ["http", "card_actions", "both"])
 def test_endpoint_reports_unavailability_without_fabricating_zeros(
-    monkeypatch, broken_section, caplog
+    monkeypatch, broken_section, caplog, operator_credentials
 ):
+    settings, operator_headers, _ = operator_credentials
     metrics, store = HttpMetrics(), OperationsStore()
 
     def fail():
@@ -247,11 +249,9 @@ def test_endpoint_reports_unavailability_without_fabricating_zeros(
         monkeypatch.setattr(metrics, "snapshot", fail)
     if broken_section in ("card_actions", "both"):
         monkeypatch.setattr(store, "action_metrics", fail)
-    app = create_app(Settings(_env_file=None), store=store, metrics=metrics)
+    app = create_app(settings, store=store, metrics=metrics)
     with TestClient(app) as client:
-        response = client.get(
-            "/operations/metrics", headers={"Authorization": "Bearer secret-session"}
-        )
+        response = client.get("/operations/metrics", headers=operator_headers)
         assert client.get("/health/live").status_code == 200
     assert response.status_code == 200
     body = response.json()

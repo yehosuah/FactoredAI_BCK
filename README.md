@@ -180,7 +180,7 @@ del simulador, no una política de disponibilidad para producción.
 | `POST /me/cards/{id}/actions` | Prepara confirmación de una acción; no ejecuta inmediatamente |
 | `GET /me/handoff` | Evidencia de acciones simuladas confirmadas y limitaciones |
 | `GET /operations/etl` | Estado agregado de la entrega y ejecución ETL |
-| `GET /operations/metrics` | Métricas HTTP y conteos agregados de acciones confirmadas; requiere sesión |
+| `GET /operations/metrics` | Métricas globales; requiere credencial de operador independiente |
 
 Las acciones requieren preparación con `Idempotency-Key` y una confirmación
 explícita separada del cliente. Los seis tools de tarjeta y la ruta `/actions`
@@ -211,8 +211,14 @@ como contexto independiente y configura PostgreSQL y secretos en ejecución.
 
 ## Observabilidad operativa
 
-`GET /operations/metrics` separa `http`, `card_actions`, `handoffs` y `limitations`. Cualquier
-sesión válida puede consultar estos agregados globales, como en `/operations/etl`.
+`GET /operations/metrics` separa `http`, `card_actions`, `handoffs` y `limitations`. Toda
+sesión de cliente queda denegada. Configura `BCK_METRICS_TOKEN_FILE` con un secreto
+independiente de operador (32–200 caracteres ASCII alfanuméricos, `_` o `-`;
+se recomienda generar 32 bytes aleatorios mediante `secrets.token_urlsafe(32)`).
+La consulta usa ese secreto como bearer; sin configuración queda denegada. El
+archivo se relee por consulta: rotarlo revoca el secreto anterior inmediatamente;
+si falta o es inválido se falla cerrado con 503 sin consultar agregados. Mantén
+el archivo privado y entrega el secreto solo a operadores, nunca a clientes/modelos.
 HTTP incluye conteos por método/plantilla y clase de estado, fallos 4xx/5xx, tasa
 de error y p50/p95 en milisegundos de hasta 1024 muestras recientes por grupo.
 Los contadores duran la vida de la instancia de aplicación; no se comparten entre
