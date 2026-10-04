@@ -133,6 +133,14 @@ una entrega completa aceptada bajo el contrato `card-support-etl-v1` en `bank`.
 Readiness devuelve 503 hasta que haya una entrega disponible. La base HTTP sola
 conserva sus rutas de salud cuando `BCK_DATA_ENABLED=false`.
 
+Con datos habilitados, readiness también verifica los permisos por columnas del
+handoff. Aplica `deploy/handoff-read-grants.sql` como administrador después de
+crear las tablas ETL, indicando el `BCK_DB_USER` real mediante la configuración
+de sesión `factored_bck.backend_role` ([ejemplo seguro](docs/human-handoffs.md#deployment)).
+El script rechaza un lector LOGIN y destinos ausentes o inválidos antes de conceder
+permisos. Luego ejecuta `python -m factored_bck.handoff_admin check` bajo
+el rol real del backend. No se concede lectura de contactos ni escritura en `bank`.
+
 `BCK_DEMO_PASSWORD_FILE` crea un usuario `demo` y tarjetas ficticias identificadas
 como `team_synthetic`; no activa acceso a clientes del organizador. Para crear una
 cuenta de prueba asociada a un cliente de la entrega aceptada:
@@ -169,18 +177,23 @@ del simulador, no una política de disponibilidad para producción.
 | `POST /auth/login`, `POST /auth/logout` | Sesión opaca, expirable y revocable de prueba |
 | `GET /me`, `GET /me/cards`, `GET /me/cards/{id}` | Identidad de sesión y tarjetas del cliente autenticado |
 | `GET /me/cards/{id}/movements` | Movimientos históricos propios, con límite y fecha de proceso |
-| `POST /me/cards/{id}/actions` | `block`, `pause`, `reactivate`, `activate`, `replacement`, `unrecognized-charge` |
+| `POST /me/cards/{id}/actions` | Prepara confirmación de una acción; no ejecuta inmediatamente |
 | `GET /me/handoff` | Evidencia de acciones simuladas confirmadas y limitaciones |
 | `GET /operations/etl` | Estado agregado de la entrega y ejecución ETL |
+| `GET /operations/metrics` | Métricas globales; requiere credencial de operador independiente |
 
-Toda acción requiere `Idempotency-Key`. Repetir la misma solicitud devuelve el
-mismo resultado; reutilizar la clave para otra solicitud devuelve 409. El backend
-verifica propiedad, elegibilidad y resultado dentro de una transacción. Un bloqueo
-por pérdida/robo no permite reactivación automática; reemplazo y cargo desconocido
-solo registran solicitudes. No ejecuta pagos, reembolsos, adjudicación de fraude,
-emisión ni envío. Los valores del organizador se presentan como históricos y los
-números de producto se enmascaran. El servicio conversacional sigue siendo consumidor
-de esta API; no se integra un modelo externo en esta implementación.
+Las acciones requieren preparación con `Idempotency-Key` y una confirmación
+explícita separada del cliente. Los seis tools de tarjeta y la ruta `/actions`
+solo preparan un comando persistido; no ejecutan la intención del modelo.
+`POST /me/action-confirmations/{id}/confirm` carga y ejecuta el comando exacto tras
+revalidar sesión, propiedad, vencimiento y estado. Cancelar impide ejecución futura.
+Solo el resultado confirmado devuelve evidencia `verified=true`; las herramientas
+siguen siendo simuladas. Ver [contrato de confirmación](docs/action-confirmation.md).
+
+No ejecuta pagos, reembolsos, adjudicación de fraude, emisión ni envío. Los valores
+del organizador son históricos y los números de producto están enmascarados.
+No hay proveedor LLM ni conversación/UI implementada: es el primitivo backend,
+no P05 completo.
 
 Los movimientos devuelven `next_cursor` (null al terminar). Para continuar, envíalo
 como `cursor` conservando la misma tarjeta y sesión; el límite puede cambiar.
@@ -195,6 +208,39 @@ credencial; cada consulta verifica la sesión y propiedad y usa parámetros SQL.
 Este checkout tiene su propio Dockerfile y Compose para la base HTTP. El Compose
 integrado se encuentra en la raíz del workspace ETL; construye este repositorio
 como contexto independiente y configura PostgreSQL y secretos en ejecución.
+
+## Observabilidad operativa
+
+`GET /operations/metrics` separa `http`, `card_actions`, `handoffs` y `limitations`. Toda
+sesión de cliente queda denegada. Configura `BCK_METRICS_TOKEN_FILE` con un secreto
+independiente de operador (32–200 caracteres ASCII alfanuméricos, `_` o `-`;
+se recomienda generar 32 bytes aleatorios mediante `secrets.token_urlsafe(32)`).
+La consulta usa ese secreto como bearer; sin configuración queda denegada. El
+archivo se relee por consulta: rotarlo revoca el secreto anterior inmediatamente;
+si falta o es inválido se falla cerrado con 503 sin consultar agregados. Mantén
+el archivo privado y entrega el secreto solo a operadores, nunca a clientes/modelos.
+HTTP incluye conteos por método/plantilla y clase de estado, fallos 4xx/5xx, tasa
+de error y p50/p95 en milisegundos de hasta 1024 muestras recientes por grupo.
+Los contadores duran la vida de la instancia de aplicación; no se comparten entre
+workers. Las métricas excluyen su propia ruta y no almacenan cuerpos, tokens,
+URLs crudas ni identificadores. Un fallo del colector no altera la respuesta bancaria.
+
+Las acciones se agregan desde la evidencia ya confirmada en PostgreSQL, sin duplicarla.
+Los replays idempotentes no aumentan su conteo; los intentos fallidos no están
+persistidos y su total se informa como `null`. Éxito HTTP o simulado no implica
+resolución segura. Consulta [mediciones, ventanas, privacidad y pruebas](docs/observability.md)
+para interpretar la respuesta y las limitaciones de esta implementación.
+
+## Herramientas internas para un futuro orquestador
+
+`app.state.tools` ofrece un `ToolDispatcher` interno cuando está habilitado el Store.
+Su catálogo fijo contiene `get_cards`, `get_card`, `get_movements`, `block_card`,
+`pause_card`, `reactivate_card`, `activate_card`, `request_replacement` y
+`register_unrecognized_charge`, además de `create_handoff` y `get_handoff`. Revalida la sesión en cada llamada, rechaza
+`customer_id` en argumentos y reutiliza la propiedad, idempotencia y evidencia del
+Store. Las acciones preparan confirmaciones; solo una confirmación explícita
+del cliente por el transporte separado puede ejecutarlas. No se añade un endpoint HTTP de herramientas ni un proveedor LLM.
+Ver [contrato, esquemas, errores y responsabilidades del orquestador](docs/backend-tools.md).
 
 ```text
 src/factored_bck/  Aplicación y configuración
@@ -223,3 +269,27 @@ de ambos checkouts.
 `escribir-spec` y `partir-en-tickets` leerán esta configuración.
 Puedes editar `docs/agents/*.md` directamente. Vuelve a ejecutar `configurar-desarrollo`
 solo cuando cambies de gestor de issues.
+
+## Handoffs humanos persistentes
+
+El backend persiste triage, evidencia propia y asignación determinista a agentes
+Digital/Hybrid aprovisionados. Sesiones de cliente y agente son independientes.
+`POST/GET /me/handoffs` y las rutas `/agent/handoffs` comparten el módulo con las
+herramientas internas. `GET /me/handoff` conserva su contrato de historial.
+Asignado no significa disponible, aceptado ni resuelto.
+
+El login de agente comparte los límites peer y de concurrencia de verificación del
+cliente. Crear/cancelar/aceptar/resolver revalida la sesión dentro de su transacción.
+El administrador local puede recuperar casos assigned/accepted con agente no
+elegible mediante `python -m factored_bck.handoff_admin recover --handoff-id <id>`:
+reutiliza el router, conserva evidencia y registra la historia previa en una auditoría.
+No existe transporte público ni tool de recuperación; casos terminales no se reabren.
+
+Consulta [contrato, política, endpoints y despliegue](docs/human-handoffs.md) y
+[datos reales inspeccionados](docs/service-agents-audit.md). El despliegue requiere
+permisos de lectura por columnas y cuentas de agentes; el chequeo de desarrollo
+no sustituye ese preflight. Senior para critical está deshabilitado por defecto.
+
+`BCK_CONFIRMATION_SECONDS` controla el TTL de confirmación (300 por defecto,
+30–900 segundos). El despliegue debe retirar workers antiguos para evitar rutas
+de ejecución inmediata. La migración de simulator es aditiva al arrancar.
