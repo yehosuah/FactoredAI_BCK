@@ -152,7 +152,7 @@ class HandoffStore:
                 if previous["request_payload"] != payload:
                     raise HTTPException(409)
                 return self._resource(previous)
-            release_id = self.store._current(pg)
+            release_id = self.store._current(pg, pin=True)
             evidence = self._evidence(pg, release_id, user["customer_id"], triage.product_id)
             routing = self._routing(pg, release_id, user["customer_id"], triage)
             assigned = routing["assigned_agent_id"] is not None
@@ -263,7 +263,7 @@ class HandoffStore:
             if operation != "cancel":
                 eligibility = self._routing(
                     pg,
-                    self.store._current(pg),
+                    self.store._current(pg, pin=True),
                     row["customer_id"],
                     Triage.model_validate(row["request_payload"]),
                     only_agent_id=agent,
@@ -294,7 +294,7 @@ class HandoffStore:
                 raise HTTPException(409)
             routing = self._routing(
                 pg,
-                self.store._current(pg),
+                self.store._current(pg, pin=True),
                 row["customer_id"],
                 Triage.model_validate(row["request_payload"]),
             )
@@ -330,7 +330,7 @@ class HandoffStore:
                 raise HTTPException(404)
             if row["status"] not in ("assigned", "accepted"):
                 raise HTTPException(409)
-            release_id = self.store._current(pg)
+            release_id = self.store._current(pg, pin=True)
             triage = Triage.model_validate(row["request_payload"])
             pg.execute(
                 "SELECT enabled FROM simulator.agent_users WHERE agent_id=%s FOR SHARE",

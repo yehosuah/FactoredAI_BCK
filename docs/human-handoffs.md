@@ -167,6 +167,12 @@ Agent polling is the delivery mechanism; there are no push notifications.
 
 ## Transactions, replays and metrics
 
+Creation, agent transitions, queue reroute and recovery hold the shared ETL
+publication lock `7236148201` through commit. This prevents source cutover between
+eligibility checks and persistence, without granting source writes. Publication
+in progress returns 503 / `Retry-After: 1` before mutation; retry against the newly
+accepted release. See [release synchronization](action-confirmation.md#accepted-release-synchronization).
+
 Creation uses the same per-customer transaction advisory lock as card actions.
 It checks the unique `(customer_id, idempotency_key)` before source reads/routing,
 pins a release ID, captures evidence, chooses a candidate and inserts one row in

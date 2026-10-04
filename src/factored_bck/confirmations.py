@@ -164,7 +164,7 @@ class Confirmations:
                     raise HTTPException(409)
                 result = self._resource(self._expire(pg, previous))
             else:
-                release_id = self.store._current(pg)
+                release_id = self.store._current(pg, pin=True)
                 self.store.preview_action(pg, release_id, user, *command.store_arguments())
                 snapshot = self._snapshot(pg, user, command, release_id)
                 confirmation_id = uuid4().hex
@@ -211,10 +211,10 @@ class Confirmations:
             if row["status"] == "executed":
                 # Replay is historical evidence, not a new action; retain current ownership checks.
                 self.store._card(
-                    pg, self.store._current(pg), user["customer_id"], command.product_id
+                    pg, self.store._current(pg, pin=True), user["customer_id"], command.product_id
                 )
             elif row["status"] == "pending":
-                release_id = self.store._current(pg)
+                release_id = self.store._current(pg, pin=True)
                 try:
                     current = self._snapshot(pg, user, command, release_id)
                     if row["policy_version"] != POLICY_VERSION or current != row["prepared_state"]:

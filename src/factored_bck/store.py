@@ -24,6 +24,9 @@ from factored_bck.security import (
 
 CARD_TYPES = ("Tarjeta Crédito", "Tarjeta Débito")
 SOURCE_CONTRACT_VERSION = "card-support-etl-v1"
+# Accepted ETL publisher takes this exclusive xact lock before touching bank.
+# Backend mutations take its shared form; no UPDATE grant on the pointer is needed.
+ETL_PUBLISH_LOCK = 7236148201
 LOGIN_KDF_LOCK = 7236148203
 LOGIN_PEER_LIMIT = 30
 STATE_MAP = {
@@ -173,7 +176,14 @@ class Store:
         with self.connect() as pg:
             return {"release_id": self._current(pg)}
 
-    def _current(self, pg):
+    def _current(self, pg, *, pin=False):
+        if pin:
+            admitted = pg.execute(
+                "SELECT pg_try_advisory_xact_lock_shared(%s) AS admitted", (ETL_PUBLISH_LOCK,)
+            ).fetchone()["admitted"]
+            if not admitted:
+                # Fail closed rather than hold request/customer locks through a long ETL run.
+                raise HTTPException(503, headers={"Retry-After": "1"})
         row = pg.execute(
             "SELECT r.release_id,r.manifest->>'contract_version' AS contract_version "
             "FROM bank.current_release c JOIN bank.releases r USING(release_id) WHERE singleton"
@@ -461,7 +471,10 @@ class Store:
                 if previous["payload"] != payload:
                     raise HTTPException(409)
                 return previous["result"]
-            release_id = release_id if release_id is not None else self._current(pg)
+            current_release = self._current(pg, pin=True)
+            if release_id is not None and release_id != current_release:
+                raise HTTPException(409)
+            release_id = current_release
             card, state, outcome = self.preview_action(
                 pg, release_id, user, product_id, action, transaction_id, process_date
             )

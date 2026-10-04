@@ -1,5 +1,22 @@
 # Server-side card action confirmation
 
+## Accepted-release synchronization
+
+Mutation transactions acquire the shared form of the accepted ETL publisher's
+transaction advisory lock `7236148201` before reading the authoritative release.
+The existing [merged publisher](https://github.com/yehosuah/FactoredAI_base/blob/646bfd98d70c7f12c6d7bb7408ec4d6aa6527a5f/src/factored_bank/etl/load.py#L73)
+takes its exclusive form before source publication and retains it through commit.
+This pins ownership/source eligibility until a confirmation commits without any
+backend UPDATE privilege on `bank.current_release`. Store action execution also
+rejects a supplied cached release that differs from this pinned current release.
+
+If publication already holds the lock, mutation admission fails closed with HTTP
+503 and `Retry-After: 1`, leaving a pending command unexecuted. Retry the same ID
+after publication; changed release then marks it stale (409). Preparation, handoff
+creation/transition/reroute/recovery use the same pinning contract. Source writers
+must continue using the publisher lock; ad-hoc privileged SQL that bypasses this
+contract is not an accepted publication path.
+
 This is the **backend confirmation primitive**, not full P05. There is no conversation
 store, conversation authorization, human-intent classifier, frontend or LLM provider.
 
