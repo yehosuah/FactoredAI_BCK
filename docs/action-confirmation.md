@@ -130,7 +130,12 @@ expiry or automatic creation of a new confirmation on rejection.
 lazily on access/replay/confirm/cancel; no background worker is needed. Confirm
 checks wall time after acquiring locks and again immediately before execution.
 Executed records do not expire their historical evidence. Duplicate successful
-confirmation returns the same receipt after reauthentication and ownership recheck.
+confirmation returns the same receipt after fresh transactional reauthentication
+and confirmation-record ownership checks, even if the current accepted source no
+longer contains the product or assigns it to another customer. This recovers
+immutable historical evidence, without checking or claiming current card state
+and without executing another action. New pending execution still requires current
+card/source ownership and accepted-release pinning.
 Cancellation is idempotent only for already-cancelled records; cancellation after
 execution returns 409 and cannot undo an action.
 

@@ -107,3 +107,77 @@ def test_all_grants_roll_back_if_source_contract_is_incomplete(grant_store):
             pg.execute("SELECT 1 FROM pg_roles WHERE rolname='backend_handoff_reader'").fetchone()
             is None
         )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "contact",
+        "table",
+        "parent",
+        "owner",
+        "schema_create",
+        "other_table",
+        "grant_option",
+        "attribute",
+        "default_acl",
+        "database",
+        "function",
+    ],
+)
+def test_existing_reader_with_extra_privileges_is_rejected_without_new_membership(
+    grant_store, extra
+):
+    with grant_store.connect() as pg:
+        pg.execute("CREATE ROLE backend_handoff_reader NOLOGIN")
+        if extra == "contact":
+            pg.execute("GRANT SELECT(email) ON bank.customers TO backend_handoff_reader")
+        elif extra == "table":
+            pg.execute("GRANT SELECT ON bank.customers TO backend_handoff_reader")
+        elif extra == "parent":
+            pg.execute("GRANT pg_read_all_data TO backend_handoff_reader")
+        elif extra == "owner":
+            pg.execute("ALTER TABLE bank.customers OWNER TO backend_handoff_reader")
+        elif extra == "schema_create":
+            pg.execute("GRANT CREATE ON SCHEMA bank TO backend_handoff_reader")
+        elif extra == "other_table":
+            pg.execute("CREATE TABLE bank.extra(secret text)")
+            pg.execute("GRANT SELECT(secret) ON bank.extra TO backend_handoff_reader")
+        elif extra == "grant_option":
+            pg.execute(
+                "GRANT SELECT(customer_id) ON bank.customers TO backend_handoff_reader "
+                "WITH GRANT OPTION"
+            )
+        elif extra == "attribute":
+            pg.execute("ALTER ROLE backend_handoff_reader CREATEROLE")
+        elif extra == "default_acl":
+            pg.execute("ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO backend_handoff_reader")
+        elif extra == "database":
+            pg.execute("GRANT CONNECT ON DATABASE postgres TO backend_handoff_reader")
+        else:
+            pg.execute("CREATE FUNCTION bank.extra() RETURNS int LANGUAGE sql AS 'SELECT 1'")
+            pg.execute("GRANT EXECUTE ON FUNCTION bank.extra() TO backend_handoff_reader")
+    with pytest.raises(psycopg.errors.RaiseException, match="reader_has_excess_privileges"):
+        apply(grant_store, "configured_backend")
+    assert not member(grant_store, "configured_backend")
+
+
+@pytest.mark.parametrize("member_type", ["LOGIN", "NOLOGIN", "ADMIN"])
+def test_existing_reader_with_unexpected_members_cannot_expose_new_columns(
+    grant_store, member_type
+):
+    with grant_store.connect() as pg:
+        pg.execute("CREATE ROLE backend_handoff_reader NOLOGIN")
+        if member_type == "ADMIN":
+            pg.execute("GRANT backend_handoff_reader TO backend_api WITH ADMIN OPTION")
+        else:
+            if member_type == "NOLOGIN":
+                pg.execute("ALTER ROLE configured_backend NOLOGIN")
+            pg.execute("GRANT backend_handoff_reader TO configured_backend")
+    with pytest.raises(psycopg.errors.RaiseException, match="reader_has_unexpected_members"):
+        apply(grant_store, "backend_api")
+    with grant_store.connect() as pg:
+        assert not pg.execute(
+            "SELECT has_column_privilege('backend_handoff_reader','bank.customers',"
+            "'customer_id','SELECT') AS allowed"
+        ).fetchone()["allowed"]

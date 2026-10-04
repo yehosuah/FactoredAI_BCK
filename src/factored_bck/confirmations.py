@@ -208,12 +208,10 @@ class Confirmations:
         with self._transaction(token) as (pg, user):
             row = self._load(pg, user, confirmation_id)
             command = CardCommand.model_validate(row["command"])
-            if row["status"] == "executed":
-                # Replay is historical evidence, not a new action; retain current ownership checks.
-                self.store._card(
-                    pg, self.store._current(pg, pin=True), user["customer_id"], command.product_id
-                )
-            elif row["status"] == "pending":
+            # Executed results are historical customer-owned evidence. _transaction
+            # reauthenticates and _load enforces ownership; only pending work checks
+            # current source/card eligibility and pins the publisher until commit.
+            if row["status"] == "pending":
                 release_id = self.store._current(pg, pin=True)
                 try:
                     current = self._snapshot(pg, user, command, release_id)

@@ -212,7 +212,13 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    NOLOGIN role inherited by the explicit deployment login. Set the session setting
    `factored_bck.backend_role` to the exact configured `BCK_DB_USER` before running
    the script; unset/empty/unknown/non-login targets and a LOGIN helper fail before
-   any grant. Role names are identifier-quoted, and all changes commit atomically.
+   any grant. An existing helper must have only the expected USAGE/narrow SELECT
+   ACLs: elevated attributes, parent memberships, ownership/default/policy dependencies,
+   other database/object grants, whole-table/contact/write privileges and grant
+   options are rejected. Existing members must be only the explicitly configured
+   backend login, without ADMIN OPTION; unrelated LOGIN/NOLOGIN members fail before
+   new columns can be exposed. Existing permissions are never revoked or repaired.
+   Role names are identifier-quoted, and all changes commit atomically.
    The current ETL refresh revokes direct
    grants to `backend_api`; independent inherited grants survive. This was tested on
    disposable PostgreSQL 17.11. Do not grant names, email, phone, whole-table SELECT,

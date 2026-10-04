@@ -20,7 +20,7 @@ not to Andrew. The separate historical docs follow-up is outside this issue.
 - [x] Recover unavailable assigned/accepted agents with deterministic routing and audit.
 - [x] Reject unsafe/terminal recovery and retain original evidence/lifecycle history.
 - [x] Readiness detects missing handoff source-column privileges.
-- [x] Full `make check`: 331 passed, zero skips (36.39s); restricted startup/process/database restart.
+- [x] Full `make check`: 350 passed, zero skips (38.92s); restricted startup/process/database restart.
 
 Final-head security/code review and required GitHub checks are separate merge gates
 tracked on the integration PR; this issue closes the locally verified implementation.
@@ -38,3 +38,8 @@ desktop UI, historical docs publication or teammate branch rewrite is authorized
 - [x] Reproduce grant-script LOGIN-reader reuse and hard-coded account failures;
   require explicit deployment login and atomically validate/grant narrow columns.
   Six red tests and eight corrected regressions; real startup/journey remain green.
+
+- [x] Reproduce excess helper privilege/member inheritance and source-cutover
+  confirmation replay loss. Fail safely without editing existing roles; recover
+  customer-owned committed receipts after fresh authentication. Sixteen red
+  regressions; full source/startup/confirmation/recovery suites remain green.
