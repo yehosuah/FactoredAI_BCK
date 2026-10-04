@@ -1,11 +1,15 @@
 """Authenticated card-support APIs; customer scope comes exclusively from the session."""
 
 from datetime import date
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
+
+from factored_bck.confirmations import ActionParameters as Action
+from factored_bck.confirmations import CardCommand
+from factored_bck.metrics import METRICS_ROUTE
 
 router = APIRouter()
 session_scheme = HTTPBearer(auto_error=False, scheme_name="TestSession")
@@ -15,15 +19,6 @@ class Login(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=200)
-
-
-class Action(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    action: Literal[
-        "block", "pause", "reactivate", "activate", "replacement", "unrecognized-charge"
-    ]
-    transaction_id: str | None = Field(default=None, min_length=1, max_length=30)
-    process_date: date | None = None
 
 
 def store(request: Request):
@@ -92,18 +87,24 @@ def movements(
 
 @router.post("/me/cards/{product_id}/actions", tags=["simulated actions"])
 def action(
-    product_id: str,
+    product_id: Annotated[str, Path(min_length=1, max_length=100, pattern=r"\S")],
     body: Action,
     idempotency_key: Annotated[
         str, Header(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.:-]+$")
     ],
     principal: Principal,
-    db: DB,
+    token: Token,
+    request: Request,
 ):
-    if body.action != "unrecognized-charge" and (body.transaction_id or body.process_date):
-        raise HTTPException(422)
-    return db.action(
-        principal, product_id, body.action, idempotency_key, body.transaction_id, body.process_date
+    return request.app.state.confirmations.prepare(
+        token,
+        CardCommand(
+            product_id=product_id,
+            action=body.action,
+            transaction_id=body.transaction_id,
+            process_date=body.process_date,
+        ),
+        idempotency_key,
     )
 
 
@@ -115,3 +116,37 @@ def handoff(principal: Principal, db: DB):
 @router.get("/operations/etl", tags=["operations"])
 def etl_status(_principal: Principal, db: DB):
     return db.etl_status()
+
+
+@router.get(METRICS_ROUTE, tags=["operations"])
+def metrics(request: Request, response: Response, _principal: Principal, db: DB):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        http = request.app.state.metrics.snapshot()
+    except Exception:
+        http = {"status": "unavailable", "reason": "collection_unavailable"}
+    try:
+        actions = db.action_metrics()
+    except Exception:
+        actions = {"status": "unavailable", "reason": "aggregation_unavailable"}
+    try:
+        handoffs = request.app.state.handoffs.metrics()
+    except Exception:
+        handoffs = {"status": "unavailable", "reason": "aggregation_unavailable"}
+    return {
+        "http": http,
+        "card_actions": actions,
+        "handoffs": handoffs,
+        "limitations": [
+            "HTTP metrics are best-effort, per application instance and reset on restart",
+            "HTTP counters and bounded recent latency samples have different windows",
+            "Latency ends at response headers; body streaming and client network are excluded",
+            "Action counts cover all customers and all retained committed evidence",
+            "Idempotent replays do not add committed actions",
+            "Failed or rejected action attempts are not persisted; action failures are unknown",
+            "HTTP success and committed simulated actions do not establish safe resolution",
+            "No refund, issuance, shipping or fraud decision is asserted",
+            "HTTP and database snapshots are not atomic with each other",
+            "Handoff counts cover all customers; assigned does not mean accepted or resolved",
+        ],
+    }

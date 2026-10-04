@@ -1,7 +1,7 @@
 """Customer-scoped historical reads and transactional, persistent simulated actions."""
 
 import secrets
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -11,6 +11,8 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from factored_bck.confirmation_schema import SCHEMA as CONFIRMATION_SCHEMA
+from factored_bck.handoff_schema import SCHEMA as HANDOFF_SCHEMA
 from factored_bck.pagination import MovementCursor
 from factored_bck.security import (
     DUMMY_PASSWORD_HASH,
@@ -164,6 +166,9 @@ class Store:
                     ),
                 )
 
+            pg.execute(HANDOFF_SCHEMA)
+            pg.execute(CONFIRMATION_SCHEMA)
+
     def ready(self):
         with self.connect() as pg:
             return {"release_id": self._current(pg)}
@@ -232,11 +237,12 @@ class Store:
                 "mode": "test_simulator",
             }
 
-    def session(self, token):
-        with self.connect() as pg:
+    def session(self, token, *, connection=None, lock=False):
+        with nullcontext(connection) if connection is not None else self.connect() as pg:
             user = pg.execute(
                 "SELECT u.username,u.customer_id,u.source_kind FROM simulator.sessions s "
-                "JOIN simulator.users u USING(username) WHERE token_hash=%s AND expires_at>now()",
+                "JOIN simulator.users u USING(username) WHERE token_hash=%s "
+                "AND expires_at>clock_timestamp()" + (" FOR SHARE OF s,u" if lock else ""),
                 (token_digest(token),),
             ).fetchone()
             if not user:
@@ -376,14 +382,68 @@ class Store:
                 "next_cursor": next_cursor,
             }
 
-    def action(self, user, product_id, action, idem_key, transaction_id=None, process_date=None):
+    def preview_action(
+        self, pg, release_id, user, product_id, action, transaction_id=None, process_date=None
+    ):
+        """Owned action eligibility without writes; execution uses this same implementation."""
+        if action not in (
+            "block",
+            "pause",
+            "reactivate",
+            "activate",
+            "replacement",
+            "unrecognized-charge",
+        ):
+            raise HTTPException(422)
+        if action != "unrecognized-charge" and (
+            transaction_id is not None or process_date is not None
+        ):
+            raise HTTPException(422)
+        card = self._card(pg, release_id, user["customer_id"], product_id)
+        state = card["simulator_state"]
+        if action == "unrecognized-charge":
+            if not transaction_id or not process_date:
+                raise HTTPException(422)
+            tx = pg.execute(
+                "SELECT transaction_id FROM bank.transactions WHERE release_id=%s AND "
+                "customer_id=%s AND product_id=%s AND transaction_id=%s AND process_date=%s",
+                (release_id, user["customer_id"], product_id, transaction_id, process_date),
+            ).fetchone()
+            if not tx:
+                raise HTTPException(404)
+            outcome = "request_registered_for_human_review"
+        elif action == "replacement":
+            if state == "CLOSED":
+                raise HTTPException(409)
+            outcome = "replacement_request_registered"
+        else:
+            try:
+                state = next_state(state, action)
+            except ValueError:
+                raise HTTPException(409) from None
+            outcome = "state_change_verified"
+        return card, state, outcome
+
+    def action(
+        self,
+        user,
+        product_id,
+        action,
+        idem_key,
+        transaction_id=None,
+        process_date=None,
+        *,
+        connection=None,
+        release_id=None,
+    ):
+        """Trusted backend execution. With connection, the caller owns the atomic commit."""
         payload = {
             "product_id": product_id,
             "action": action,
             "transaction_id": transaction_id,
             "process_date": process_date.isoformat() if process_date else None,
         }
-        with self.connect() as pg:
+        with nullcontext(connection) if connection is not None else self.connect() as pg:
             # Serialize a customer's idempotency keys and actions; no split check/write race.
             pg.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s,7236148203))",
@@ -398,33 +458,16 @@ class Store:
                 if previous["payload"] != payload:
                     raise HTTPException(409)
                 return previous["result"]
-            release_id = self._current(pg)
-            card = self._card(pg, release_id, user["customer_id"], product_id)
-            state = card["simulator_state"]
-            if action == "unrecognized-charge":
-                if not transaction_id or not process_date:
-                    raise HTTPException(422)
-                tx = pg.execute(
-                    "SELECT transaction_id FROM bank.transactions WHERE release_id=%s AND "
-                    "customer_id=%s AND product_id=%s AND transaction_id=%s AND process_date=%s",
-                    (release_id, user["customer_id"], product_id, transaction_id, process_date),
-                ).fetchone()
-                if not tx:
-                    raise HTTPException(404)
-                outcome = "request_registered_for_human_review"
-            elif action == "replacement":
-                if state == "CLOSED":
-                    raise HTTPException(409)
-                outcome = "replacement_request_registered"
-            else:
-                try:
-                    state = next_state(state, action)
-                except ValueError:
-                    raise HTTPException(409) from None
+            release_id = release_id if release_id is not None else self._current(pg)
+            card, state, outcome = self.preview_action(
+                pg, release_id, user, product_id, action, transaction_id, process_date
+            )
+            if outcome == "state_change_verified":
                 pg.execute(
                     "INSERT INTO simulator.card_states(product_id,customer_id,state) "
                     "VALUES(%s,%s,%s) "
-                    "ON CONFLICT(product_id) DO UPDATE SET state=excluded.state,updated_at=now() "
+                    "ON CONFLICT(product_id) DO UPDATE SET state=excluded.state,updated_at=now(), "
+                    "revision=simulator.card_states.revision+1 "
                     "WHERE simulator.card_states.customer_id=excluded.customer_id",
                     (product_id, user["customer_id"], state),
                 )
@@ -472,6 +515,48 @@ class Store:
                     "No refund, issuance, shipping or fraud decision is asserted",
                 ],
             }
+
+    def action_metrics(self):
+        """Aggregate committed evidence only; never load payloads or identifying fields."""
+        with self.connect() as pg:
+            pg.execute("SET TRANSACTION READ ONLY")
+            pg.execute("SET LOCAL statement_timeout = '2s'")
+            rows = pg.execute(
+                "SELECT CASE WHEN result->>'action'=ANY(%s) THEN result->>'action' "
+                "ELSE 'other' END AS action, "
+                "CASE WHEN result->>'outcome'=ANY(%s) THEN result->>'outcome' "
+                "ELSE 'other' END AS outcome, count(*) AS committed_count, "
+                "count(*) FILTER (WHERE result->>'status'='succeeded') AS succeeded_count "
+                "FROM simulator.actions GROUP BY 1,2 ORDER BY 1,2",
+                (
+                    [
+                        "block",
+                        "pause",
+                        "reactivate",
+                        "activate",
+                        "replacement",
+                        "unrecognized-charge",
+                    ],
+                    [
+                        "state_change_verified",
+                        "replacement_request_registered",
+                        "request_registered_for_human_review",
+                    ],
+                ),
+            ).fetchall()
+        return {
+            "status": "available",
+            "scope": "all_customers",
+            "source": "simulator.actions",
+            "window": {
+                "kind": "all_retained_committed_rows",
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+            "total_committed": sum(row["committed_count"] for row in rows),
+            "total_succeeded": sum(row["succeeded_count"] for row in rows),
+            "total_failures": None,
+            "actions": rows,
+        }
 
     def etl_status(self):
         with self.connect() as pg:
