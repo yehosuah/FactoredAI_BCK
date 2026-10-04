@@ -324,7 +324,7 @@ def test_cursor_is_scoped_and_rejects_malformed_or_stale_continuation(regression
     status(lambda: store.movements(user, "TEAM-CARD-ACTIVE", 1, date(2026, 1, 3), cursor), 422)
     status(lambda: store.movements(user, "TEAM-CARD-PAUSED", 1, None, cursor), 422)
     other = {"customer_id": "TEAM-CUSTOMER-OTHER"}
-    status(lambda: store.movements(other, "TEAM-CARD-ACTIVE", 1, None, cursor), 404)
+    status(lambda: store.movements(other, "TEAM-CARD-ACTIVE", 1, None, cursor), 422)
     parsed = MovementCursor.decode(cursor)
     for value in (
         "!broken",
@@ -349,6 +349,40 @@ def test_empty_page_has_no_continuation(regression_store):
     )
     assert page["movements"] == []
     assert page["next_cursor"] is None
+
+
+def test_stale_cursor_returns_conflict_when_new_release_removes_organizer_card(regression_store):
+    store = regression_store
+    seed_movements(store)
+    with store.connect() as pg:
+        pg.execute(
+            "INSERT INTO bank.products VALUES ('review-release','TEAM-ORGANIZER-CARD',"
+            "'TEAM-CUSTOMER-001','Tarjeta Crédito','TEAM-TEST-7777','USD',0,1000,'Active',now())"
+        )
+        pg.execute("UPDATE bank.transactions SET product_id='TEAM-ORGANIZER-CARD'")
+    token = store.login("demo", "old-team-password", "test")["access_token"]
+    with TestClient(create_app(store.settings, store=store)) as client:
+        headers = {"Authorization": "Bearer " + token}
+        path = "/me/cards/TEAM-ORGANIZER-CARD/movements"
+        first = client.get(path, params={"limit": 1}, headers=headers)
+        assert first.status_code == 200
+        cursor = first.json()["next_cursor"]
+        with store.connect() as pg:
+            pg.execute(
+                "INSERT INTO bank.releases VALUES ('card-removed-release',%s)",
+                (Jsonb({"contract_version": "card-support-etl-v1"}),),
+            )
+            pg.execute("UPDATE bank.current_release SET release_id='card-removed-release'")
+        assert client.get(path, params={"cursor": cursor}, headers=headers).status_code == 409
+        assert client.get(path, headers=headers).status_code == 404
+        assert client.get(path, params={"cursor": cursor}).status_code == 401
+        # A different trusted principal cannot use the former owner's cursor.
+        status(
+            lambda: store.movements(
+                {"customer_id": "TEAM-CUSTOMER-OTHER"}, "TEAM-ORGANIZER-CARD", 1, None, cursor
+            ),
+            422,
+        )
 
 
 def test_invalid_rotation_is_atomic(regression_store):

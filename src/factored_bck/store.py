@@ -313,9 +313,6 @@ class Store:
     def movements(self, user, product_id, limit, before_date, cursor=None):
         continuation = MovementCursor.decode(cursor) if cursor is not None else None
         with self.release() as (pg, release_id):
-            self._card(pg, release_id, user["customer_id"], product_id)
-            seek = ""
-            params = [release_id, user["customer_id"], product_id]
             if continuation is not None:
                 if (continuation.customer_id, continuation.product_id) != (
                     user["customer_id"],
@@ -323,8 +320,12 @@ class Store:
                 ):
                     raise HTTPException(422)
                 if continuation.release_id != release_id:
-                    # Never silently mix releases while continuing a historical page.
+                    # A scoped stale cursor conflicts even if its card was removed.
                     raise HTTPException(409)
+            self._card(pg, release_id, user["customer_id"], product_id)
+            seek = ""
+            params = [release_id, user["customer_id"], product_id]
+            if continuation is not None:
                 if before_date is not None and before_date != continuation.before_date:
                     raise HTTPException(422)
                 before_date = continuation.before_date
