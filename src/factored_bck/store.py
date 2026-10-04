@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from factored_bck.confirmation_schema import SCHEMA as CONFIRMATION_SCHEMA
+from factored_bck.conversation_schema import SCHEMA as CONVERSATION_SCHEMA
 from factored_bck.handoff_schema import SCHEMA as HANDOFF_SCHEMA
 from factored_bck.security import next_state, password_hash, password_matches, token_digest
 
@@ -143,6 +144,7 @@ class Store:
 
             pg.execute(HANDOFF_SCHEMA)
             pg.execute(CONFIRMATION_SCHEMA)
+            pg.execute(CONVERSATION_SCHEMA)
 
     def ready(self):
         with self.connect() as pg:

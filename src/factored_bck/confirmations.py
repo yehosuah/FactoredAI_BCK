@@ -1,6 +1,6 @@
 """Server-owned card commands; customer confirmation is outside the LLM tool catalog."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -60,11 +60,11 @@ class Confirmations:
         self.store = store
 
     @contextmanager
-    def _transaction(self, token):
+    def _transaction(self, token, *, connection=None):
         if not isinstance(token, str) or not 1 <= len(token) <= 200:
             raise HTTPException(401)
         initial = self.store.session(token)
-        with self.store.connect() as pg:
+        with nullcontext(connection) if connection is not None else self.store.connect() as pg:
             # Same order for every operation and Store.action: customer lock, then row lock.
             pg.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s,7236148203))",
@@ -140,10 +140,12 @@ class Confirmations:
             raise HTTPException(404)
         return self._expire(pg, row)
 
-    def prepare(self, token, command: CardCommand, idempotency_key, *, conversation_id=None):
+    def prepare(
+        self, token, command: CardCommand, idempotency_key, *, conversation_id=None, connection=None
+    ):
         command = CardCommand.model_validate(command)
         key = TypeAdapter(CommandKey).validate_python(idempotency_key, strict=True)
-        # Reserved seam for a future trusted server-owned conversation, never a tool/body field.
+        # Trusted server-owned conversation, never an adapter/tool/body field.
         if conversation_id is not None:
             conversation_id = TypeAdapter(ConversationId).validate_python(
                 conversation_id, strict=True
@@ -153,7 +155,7 @@ class Confirmations:
         ):
             raise HTTPException(422)
         payload = command.model_dump()
-        with self._transaction(token) as (pg, user):
+        with self._transaction(token, connection=connection) as (pg, user):
             previous = pg.execute(
                 "SELECT * FROM simulator.action_confirmations WHERE customer_id=%s "
                 "AND preparation_key=%s FOR UPDATE",

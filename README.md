@@ -233,3 +233,17 @@ no sustituye ese preflight. Senior para critical está deshabilitado por defecto
 `BCK_CONFIRMATION_SECONDS` controla el TTL de confirmación (300 por defecto,
 30–900 segundos). El despliegue debe retirar workers antiguos para evitar rutas
 de ejecución inmediata. La migración de simulator es aditiva al arrancar.
+
+## Conversaciones persistentes (P04)
+
+`POST /me/conversations`, `GET /me/conversations/{id}` y
+`POST /me/conversations/{id}/turns` conservan conversaciones autenticadas ES/PT y
+sus eventos ordenados. Creación y turnos requieren `Idempotency-Key`. El adaptador
+ML se inyecta en `create_app`; sus propuestas se validan y nunca confirman acciones.
+Los tools mutantes preparan confirmaciones vinculadas a la conversación. Reconnect
+incorpora estados y evidencia verificada de confirmaciones y handoffs propios.
+
+El adaptador está deshabilitado por defecto. `BCK_CONVERSATION_ADAPTER=stub` habilita
+un stub determinista identificado como prueba; `BCK_ADAPTER_TIMEOUT_SECONDS` limita
+su espera (5 segundos por defecto). No incluye modelo real ni frontend. Consulta
+[contrato, comandos de prueba y dependencias P00/P01](docs/conversations.md).

@@ -326,3 +326,13 @@ history/evidence, terminal and eligible rejections, transport exclusion, rollbac
 concurrent recovery and both lock orders for accept/resolve races. All database
 tests use the private synthetic PostgreSQL setup. No test requires organizer records
 or the ETL checkout.
+
+## Conversation-scoped creation
+
+P04 adds a trusted host-only `conversation_id`/transaction seam to creation. Cases
+created through conversations persist that ID and return it in their resource.
+Their action evidence is restricted to executed confirmations bound to that same
+conversation; standalone cases retain the original customer-scoped behavior.
+Conversation events link the case to its originating turn and preserve subsequent
+status/recovery observations. Routing and recovery rules above are unchanged.
+See [conversation contract](conversations.md).

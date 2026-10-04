@@ -176,3 +176,10 @@ existing action metrics and handoff evidence see only confirmed committed action
 Retention/cleanup, frontend rendering, conversation persistence/authorization,
 customer-event provenance beyond bearer transport, and provider integration remain
 out of scope. **Full P05 is not complete.**
+
+P04 now uses the reserved server-owned `conversation_id` seam from the conversation
+host via ToolDispatcher. Preparation may join that host's transaction so a failed
+turn commit leaves no orphan confirmation. The separate customer confirmation
+endpoint remains the only execution authority. Reconnecting the conversation reads
+committed status/evidence and appends correlated events; it never executes or confirms.
+See [conversation contract](conversations.md).
