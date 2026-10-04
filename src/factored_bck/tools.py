@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
-from factored_bck.evidence import ActionEvidence
+from factored_bck.confirmations import CardCommand, Confirmations
 from factored_bck.handoff import CreateHandoffArguments, GetHandoffArguments
 from factored_bck.handoff_store import HandoffStore
 
@@ -63,7 +63,6 @@ class _Tool:
     arguments: type[BaseModel]
     description: str
     action: str | None = None
-    outcome: str = "state_change_verified"
 
 
 _TOOLS = MappingProxyType(
@@ -92,13 +91,11 @@ _TOOLS = MappingProxyType(
             ActionArguments,
             "Register a simulated replacement request; no issuance or shipping.",
             "replacement",
-            "replacement_request_registered",
         ),
         "register_unrecognized_charge": _Tool(
             ChargeArguments,
             "Register an owned historical charge for review; no refund or fraud decision.",
             "unrecognized-charge",
-            "request_registered_for_human_review",
         ),
     }
 )
@@ -128,8 +125,9 @@ class ToolDispatcher:
     The Store dependency is trusted backend code, never caller-supplied tool data.
     """
 
-    def __init__(self, store, handoffs=None):
+    def __init__(self, store, handoffs=None, confirmations=None):
         self._store = store
+        self._confirmations = confirmations if confirmations is not None else Confirmations(store)
         self._handoffs = handoffs if handoffs is not None else HandoffStore(store)
 
     def catalog(self):
@@ -137,7 +135,11 @@ class ToolDispatcher:
         return [
             {
                 "name": name,
-                "description": tool.description,
+                "description": (
+                    "Prepare customer confirmation; does not execute. " if tool.action else ""
+                )
+                + tool.description,
+                "requires_confirmation": tool.action is not None,
                 "mutating": tool.action is not None or name == "create_handoff",
                 "input_schema": tool.arguments.model_json_schema(),
             }
@@ -165,17 +167,21 @@ class ToolDispatcher:
             except ValidationError:
                 return _failure("invalid_arguments")
             if tool.action is not None:
-                evidence = self._store.action(
-                    principal,
-                    inputs.product_id,
-                    tool.action,
+                pending = self._confirmations.prepare(
+                    token,
+                    CardCommand(
+                        product_id=inputs.product_id,
+                        action=tool.action,
+                        transaction_id=inputs.transaction_id
+                        if isinstance(inputs, ChargeArguments)
+                        else None,
+                        process_date=inputs.process_date
+                        if isinstance(inputs, ChargeArguments)
+                        else None,
+                    ),
                     inputs.idempotency_key,
-                    inputs.transaction_id if isinstance(inputs, ChargeArguments) else None,
-                    date.fromisoformat(inputs.process_date)
-                    if isinstance(inputs, ChargeArguments)
-                    else None,
                 )
-                return self._verified_action(tool, inputs.product_id, evidence)
+                return {"ok": True, "data": pending}
             if name == "create_handoff":
                 data = self._handoffs.create(token, inputs)
             elif name == "get_handoff":
@@ -208,22 +214,3 @@ class ToolDispatcher:
         except Exception:
             # Never log/re-raise exceptions containing arguments, tokens or database details.
             return _failure("backend_error")
-
-    @staticmethod
-    def _verified_action(tool, product_id, result):
-        try:
-            evidence = ActionEvidence.model_validate(result)
-        except ValidationError:
-            return _failure("unverified_result")
-        if (
-            evidence.action != tool.action
-            or evidence.product_id != product_id
-            or evidence.simulated is not True
-            or evidence.outcome != tool.outcome
-            or (tool.outcome != "state_change_verified" and evidence.request_id is None)
-        ):
-            return _failure("unverified_result")
-        return {
-            "ok": True,
-            "data": {"verified": True, "evidence": evidence.model_dump(exclude_none=True)},
-        }

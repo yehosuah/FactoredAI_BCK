@@ -140,19 +140,23 @@ local; no hay registro público basado únicamente en un ID de cliente.
 | `POST /auth/login`, `POST /auth/logout` | Sesión opaca, expirable y revocable de prueba |
 | `GET /me`, `GET /me/cards`, `GET /me/cards/{id}` | Identidad de sesión y tarjetas del cliente autenticado |
 | `GET /me/cards/{id}/movements` | Movimientos históricos propios, con límite y fecha de proceso |
-| `POST /me/cards/{id}/actions` | `block`, `pause`, `reactivate`, `activate`, `replacement`, `unrecognized-charge` |
+| `POST /me/cards/{id}/actions` | Prepara confirmación de una acción; no ejecuta inmediatamente |
 | `GET /me/handoff` | Evidencia de acciones simuladas confirmadas y limitaciones |
 | `GET /operations/etl` | Estado agregado de la entrega y ejecución ETL |
 | `GET /operations/metrics` | Métricas HTTP y conteos agregados de acciones confirmadas; requiere sesión |
 
-Toda acción requiere `Idempotency-Key`. Repetir la misma solicitud devuelve el
-mismo resultado; reutilizar la clave para otra solicitud devuelve 409. El backend
-verifica propiedad, elegibilidad y resultado dentro de una transacción. Un bloqueo
-por pérdida/robo no permite reactivación automática; reemplazo y cargo desconocido
-solo registran solicitudes. No ejecuta pagos, reembolsos, adjudicación de fraude,
-emisión ni envío. Los valores del organizador se presentan como históricos y los
-números de producto se enmascaran. El servicio conversacional sigue siendo consumidor
-de esta API; no se integra un modelo externo en esta implementación.
+Las acciones requieren preparación con `Idempotency-Key` y una confirmación
+explícita separada del cliente. Los seis tools de tarjeta y la ruta `/actions`
+solo preparan un comando persistido; no ejecutan la intención del modelo.
+`POST /me/action-confirmations/{id}/confirm` carga y ejecuta el comando exacto tras
+revalidar sesión, propiedad, vencimiento y estado. Cancelar impide ejecución futura.
+Solo el resultado confirmado devuelve evidencia `verified=true`; las herramientas
+siguen siendo simuladas. Ver [contrato de confirmación](docs/action-confirmation.md).
+
+No ejecuta pagos, reembolsos, adjudicación de fraude, emisión ni envío. Los valores
+del organizador son históricos y los números de producto están enmascarados.
+No hay proveedor LLM ni conversación/UI implementada: es el primitivo backend,
+no P05 completo.
 
 Este checkout tiene su propio Dockerfile y Compose para la base HTTP. El Compose
 integrado se encuentra en la raíz del workspace ETL; construye este repositorio
@@ -181,8 +185,8 @@ Su catálogo fijo contiene `get_cards`, `get_card`, `get_movements`, `block_card
 `pause_card`, `reactivate_card`, `activate_card`, `request_replacement` y
 `register_unrecognized_charge`, además de `create_handoff` y `get_handoff`. Revalida la sesión en cada llamada, rechaza
 `customer_id` en argumentos y reutiliza la propiedad, idempotencia y evidencia del
-Store. Las acciones solo devuelven éxito verificado tras recibir evidencia válida
-del backend. No se añade un endpoint HTTP de herramientas ni un proveedor LLM.
+Store. Las acciones preparan confirmaciones; solo una confirmación explícita
+del cliente por el transporte separado puede ejecutarlas. No se añade un endpoint HTTP de herramientas ni un proveedor LLM.
 Ver [contrato, esquemas, errores y responsabilidades del orquestador](docs/backend-tools.md).
 
 ```text
@@ -225,3 +229,7 @@ Consulta [contrato, política, endpoints y despliegue](docs/human-handoffs.md) y
 [datos reales inspeccionados](docs/service-agents-audit.md). El despliegue requiere
 permisos de lectura por columnas y cuentas de agentes; el chequeo de desarrollo
 no sustituye ese preflight. Senior para critical está deshabilitado por defecto.
+
+`BCK_CONFIRMATION_SECONDS` controla el TTL de confirmación (300 por defecto,
+30–900 segundos). El despliegue debe retirar workers antiguos para evitar rutas
+de ejecución inmediata. La migración de simulator es aditiva al arrancar.

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from factored_bck.app import create_app
+from factored_bck.evidence import verified_action_evidence
 from factored_bck.settings import Settings
 from factored_bck.tools import ExecutionContext, ToolDispatcher
 
@@ -151,22 +152,21 @@ def test_reads_get_scope_only_from_fresh_session(backend):
 
 
 @pytest.mark.parametrize("tool,action", ACTION_NAMES.items())
-def test_actions_delegate_fixed_action_and_return_backend_evidence(backend, tool, action):
-    evidence = receipt(action)
-    backend.action.return_value = evidence
+def test_actions_only_prepare_fixed_command(backend, tool, action):
+    confirmations = Mock()
+    confirmations.prepare.return_value = {"status": "pending", "verified": False}
     arguments = {"product_id": "card-one", "idempotency_key": "stable-key"}
     if tool == "register_unrecognized_charge":
         arguments.update(transaction_id="tx-one", process_date="2026-01-02")
-    result = ToolDispatcher(backend).execute(tool, arguments, context=CONTEXT)
-    assert result == {"ok": True, "data": {"verified": True, "evidence": evidence}}
-    backend.action.assert_called_once_with(
-        PRINCIPAL,
-        "card-one",
-        action,
-        "stable-key",
-        "tx-one" if tool == "register_unrecognized_charge" else None,
-        date(2026, 1, 2) if tool == "register_unrecognized_charge" else None,
+    result = ToolDispatcher(backend, confirmations=confirmations).execute(
+        tool, arguments, context=CONTEXT
     )
+    assert result == {"ok": True, "data": {"status": "pending", "verified": False}}
+    backend.action.assert_not_called()
+    token, command, key = confirmations.prepare.call_args.args
+    assert token == TOKEN and key == "stable-key"
+    assert command.action == action and command.product_id == "card-one"
+    assert command.process_date == ("2026-01-02" if action == "unrecognized-charge" else None)
 
 
 @pytest.mark.parametrize(
@@ -182,28 +182,26 @@ def test_actions_delegate_fixed_action_and_return_backend_evidence(backend, tool
     ],
 )
 def test_invalid_evidence_is_never_reported_as_success(backend, change):
-    backend.action.return_value = {**receipt(), **change}
-    result = ToolDispatcher(backend).execute(
-        "pause_card",
-        {"product_id": "card-one", "idempotency_key": "key"},
-        context=CONTEXT,
-    )
-    assert result["ok"] is False
-    assert result["error"]["code"] == "unverified_result"
-    assert "data" not in result
+    with pytest.raises(ValueError):
+        verified_action_evidence("pause", "card-one", "state_change_verified", receipt() | change)
 
 
 def test_requested_intent_is_not_evidence_and_unexpected_metadata_is_removed(backend):
-    dispatcher = ToolDispatcher(backend)
-    arguments = {"product_id": "card-one", "idempotency_key": "key"}
-    backend.action.return_value = {"status": "succeeded"}
-    assert not dispatcher.execute("pause_card", arguments, context=CONTEXT)["ok"]
-    backend.action.return_value = {**receipt(), "access_token": TOKEN}
-    result = dispatcher.execute("pause_card", arguments, context=CONTEXT)
-    assert result["ok"]
+    with pytest.raises(ValueError):
+        verified_action_evidence(
+            "pause", "card-one", "state_change_verified", {"status": "succeeded"}
+        )
+    result = verified_action_evidence(
+        "pause", "card-one", "state_change_verified", receipt() | {"access_token": TOKEN}
+    )
     assert TOKEN not in json.dumps(result)
-    backend.action.return_value = {**receipt("replacement"), "request_id": None}
-    assert not dispatcher.execute("request_replacement", arguments, context=CONTEXT)["ok"]
+    with pytest.raises(ValueError):
+        verified_action_evidence(
+            "replacement",
+            "card-one",
+            "replacement_request_registered",
+            receipt("replacement") | {"request_id": None},
+        )
 
 
 @pytest.mark.parametrize(
@@ -217,8 +215,9 @@ def test_requested_intent_is_not_evidence_and_unexpected_metadata_is_removed(bac
     ],
 )
 def test_failures_never_become_fake_success_or_leak_secrets(backend, failure, code, caplog):
-    backend.action.side_effect = failure
-    result = ToolDispatcher(backend).execute(
+    confirmations = Mock()
+    confirmations.prepare.side_effect = failure
+    result = ToolDispatcher(backend, confirmations=confirmations).execute(
         "pause_card",
         {"product_id": "card-one", "idempotency_key": "key"},
         context=CONTEXT,

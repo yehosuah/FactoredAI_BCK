@@ -5,45 +5,7 @@ from datetime import date
 
 import pytest
 
-from factored_bck.security import password_hash
-from factored_bck.tools import ExecutionContext, ToolDispatcher
-
-
-@pytest.fixture
-def tool_backend(store):
-    with store.connect() as pg:
-        pg.execute(
-            "CREATE TABLE bank.products (release_id text, product_id text, customer_id text, "
-            "product_type text, product_number text, currency text, current_balance numeric, "
-            "credit_limit numeric, product_status text, last_updated timestamp)"
-        )
-        pg.execute(
-            "CREATE TABLE bank.transactions (release_id text, customer_id text, product_id text, "
-            "transaction_id text, transaction_date date, process_date date, amount numeric, "
-            "currency text, transaction_type text, transaction_status text, merchant_name text)"
-        )
-        for number in (1, 2):
-            pg.execute(
-                "INSERT INTO simulator.users VALUES(%s,%s,%s,'team_synthetic')",
-                (f"user-{number}", password_hash("test-password"), f"customer-{number}"),
-            )
-            pg.execute(
-                "INSERT INTO simulator.fixture_cards VALUES "
-                "(%s,%s,'Tarjeta Crédito','TEAM-1234','USD',100,1000,'ACTIVE','team_synthetic')",
-                (f"card-{number}", f"customer-{number}"),
-            )
-            pg.execute(
-                "INSERT INTO simulator.card_states(product_id,customer_id,state) "
-                "VALUES(%s,%s,'ACTIVE')",
-                (f"card-{number}", f"customer-{number}"),
-            )
-            pg.execute(
-                "INSERT INTO bank.transactions VALUES ('test-release',%s,%s,%s,"
-                "'2026-01-01','2026-01-02',10,'USD','purchase','posted','Fixture Merchant')",
-                (f"customer-{number}", f"card-{number}", f"tx-{number}"),
-            )
-    token = store.login("user-1", "test-password", "local-test")["access_token"]
-    return store, ToolDispatcher(store), ExecutionContext(session_token=token)
+from factored_bck.confirmations import Confirmations
 
 
 def test_real_reads_preserve_customer_scope_and_historical_semantics(tool_backend):
@@ -106,8 +68,16 @@ def test_verified_evidence_is_the_committed_record_and_replay_is_identical(
     arguments = {"product_id": "card-1", "idempotency_key": "stable-key"}
     if tool == "register_unrecognized_charge":
         arguments.update(transaction_id="tx-1", process_date="2026-01-02")
-    result = dispatcher.execute(tool, arguments, context=context)
-    assert result["ok"] and result["data"]["verified"]
+    prepared = dispatcher.execute(tool, arguments, context=context)
+    assert prepared["ok"] and not prepared["data"]["verified"]
+    assert store.action_metrics()["total_committed"] == 0
+    result = {
+        "ok": True,
+        "data": Confirmations(store).confirm(
+            context.session_token.get_secret_value(), prepared["data"]["confirmation_id"]
+        ),
+    }
+    assert result["data"]["verified"]
     assert result["data"]["evidence"]["outcome"] == outcome
     assert result["data"]["evidence"]["simulated"] is True
     with store.connect() as pg:
@@ -118,17 +88,24 @@ def test_verified_evidence_is_the_committed_record_and_replay_is_identical(
 
 
 def test_cross_transport_replay_and_conflicting_reuse(tool_backend):
+    from fastapi.testclient import TestClient
+
+    from factored_bck.app import create_app
+
     store, dispatcher, context = tool_backend
-    # Existing HTTP routes call this exact Store interface: evidence must be shared.
-    principal = store.session(context.session_token.get_secret_value())
-    evidence = store.action(principal, "card-1", "pause", "same-key")
+    token = context.session_token.get_secret_value()
     arguments = {"product_id": "card-1", "idempotency_key": "same-key"}
-    assert (
-        dispatcher.execute("pause_card", arguments, context=context)["data"]["evidence"] == evidence
-    )
+    prepared = dispatcher.execute("pause_card", arguments, context=context)
+    with TestClient(create_app(store.settings, store=store)) as client:
+        response = client.post(
+            "/me/cards/card-1/actions",
+            json={"action": "pause"},
+            headers={"Authorization": "Bearer " + token, "Idempotency-Key": "same-key"},
+        )
+    assert response.json() == prepared["data"]
     result = dispatcher.execute("block_card", arguments, context=context)
     assert result["error"]["code"] == "conflict"
-    assert store.action_metrics()["total_committed"] == 1
+    assert store.action_metrics()["total_committed"] == 0
 
 
 def test_ineligible_action_and_other_customers_charge_never_succeed(tool_backend):
@@ -155,8 +132,10 @@ def test_ineligible_action_and_other_customers_charge_never_succeed(tool_backend
 def test_real_session_revocation_is_checked_even_for_replays(tool_backend, revocation, caplog):
     store, dispatcher, context = tool_backend
     arguments = {"product_id": "card-1", "idempotency_key": "key"}
-    assert dispatcher.execute("pause_card", arguments, context=context)["ok"]
+    prepared = dispatcher.execute("pause_card", arguments, context=context)
+    assert prepared["ok"]
     token = context.session_token.get_secret_value()
+    Confirmations(store).confirm(token, prepared["data"]["confirmation_id"])
     if revocation == "logout":
         store.logout(token)
     else:

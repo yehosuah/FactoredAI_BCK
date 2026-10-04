@@ -1,12 +1,14 @@
 """Authenticated card-support APIs; customer scope comes exclusively from the session."""
 
 from datetime import date
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
+from factored_bck.confirmations import ActionParameters as Action
+from factored_bck.confirmations import CardCommand
 from factored_bck.metrics import METRICS_ROUTE
 
 router = APIRouter()
@@ -17,15 +19,6 @@ class Login(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1, max_length=200)
-
-
-class Action(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    action: Literal[
-        "block", "pause", "reactivate", "activate", "replacement", "unrecognized-charge"
-    ]
-    transaction_id: str | None = Field(default=None, min_length=1, max_length=30)
-    process_date: date | None = None
 
 
 def store(request: Request):
@@ -93,18 +86,24 @@ def movements(
 
 @router.post("/me/cards/{product_id}/actions", tags=["simulated actions"])
 def action(
-    product_id: str,
+    product_id: Annotated[str, Path(min_length=1, max_length=100, pattern=r"\S")],
     body: Action,
     idempotency_key: Annotated[
         str, Header(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.:-]+$")
     ],
     principal: Principal,
-    db: DB,
+    token: Token,
+    request: Request,
 ):
-    if body.action != "unrecognized-charge" and (body.transaction_id or body.process_date):
-        raise HTTPException(422)
-    return db.action(
-        principal, product_id, body.action, idempotency_key, body.transaction_id, body.process_date
+    return request.app.state.confirmations.prepare(
+        token,
+        CardCommand(
+            product_id=product_id,
+            action=body.action,
+            transaction_id=body.transaction_id,
+            process_date=body.process_date,
+        ),
+        idempotency_key,
     )
 
 

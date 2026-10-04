@@ -7,8 +7,10 @@ from tempfile import TemporaryDirectory
 import pytest
 from psycopg.types.json import Jsonb
 
+from factored_bck.security import password_hash
 from factored_bck.settings import Settings
 from factored_bck.store import Store
+from factored_bck.tools import ExecutionContext, ToolDispatcher
 
 
 @pytest.fixture(autouse=True)
@@ -79,3 +81,40 @@ def store(postgres_settings):
         pg.execute("INSERT INTO bank.current_release VALUES (true,'test-release')")
     store.initialize()
     return store
+
+
+@pytest.fixture
+def tool_backend(store):
+    with store.connect() as pg:
+        pg.execute(
+            "CREATE TABLE bank.products (release_id text, product_id text, customer_id text, "
+            "product_type text, product_number text, currency text, current_balance numeric, "
+            "credit_limit numeric, product_status text, last_updated timestamp)"
+        )
+        pg.execute(
+            "CREATE TABLE bank.transactions (release_id text, customer_id text, product_id text, "
+            "transaction_id text, transaction_date date, process_date date, amount numeric, "
+            "currency text, transaction_type text, transaction_status text, merchant_name text)"
+        )
+        for number in (1, 2):
+            pg.execute(
+                "INSERT INTO simulator.users VALUES(%s,%s,%s,'team_synthetic')",
+                (f"user-{number}", password_hash("test-password"), f"customer-{number}"),
+            )
+            pg.execute(
+                "INSERT INTO simulator.fixture_cards VALUES "
+                "(%s,%s,'Tarjeta Crédito','TEAM-1234','USD',100,1000,'ACTIVE','team_synthetic')",
+                (f"card-{number}", f"customer-{number}"),
+            )
+            pg.execute(
+                "INSERT INTO simulator.card_states(product_id,customer_id,state) "
+                "VALUES(%s,%s,'ACTIVE')",
+                (f"card-{number}", f"customer-{number}"),
+            )
+            pg.execute(
+                "INSERT INTO bank.transactions VALUES ('test-release',%s,%s,%s,"
+                "'2026-01-01','2026-01-02',10,'USD','purchase','posted','Fixture Merchant')",
+                (f"customer-{number}", f"card-{number}", f"tx-{number}"),
+            )
+    token = store.login("user-1", "test-password", "local-test")["access_token"]
+    return store, ToolDispatcher(store), ExecutionContext(session_token=token)

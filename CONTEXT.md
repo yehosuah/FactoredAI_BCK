@@ -19,3 +19,5 @@
 | Severidad | Riesgo del caso que determina el piso de experiencia, independiente del segmento. |
 | Prioridad de servicio | Orden por severidad y preferencia Premium simulada dentro de la misma severidad; no reduce pisos. |
 | Agente elegible | Cuenta de simulador aprovisionada cuyo snapshot cumple estado, tipo, idioma, especialidad y experiencia; no prueba disponibilidad en vivo. |
+| Confirmación de acción | Comando exacto persistido del cliente autenticado, con estado/version y vencimiento; solo una confirmación explícita por ID puede autorizar su ejecución. |
+| Revisión de tarjeta | Contador persistido que cambia con transiciones simuladas y detecta cambios que vuelven al mismo estado. |

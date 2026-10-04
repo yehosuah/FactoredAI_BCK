@@ -24,3 +24,17 @@ class ActionEvidence(BaseModel):
     source_kind: Literal["team_synthetic", "organizer_synthetic"]
     release_id: str = Field(min_length=1, max_length=200)
     request_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+
+def verified_action_evidence(action, product_id, outcome, result):
+    """Validate the same action receipt contract for tools and confirmation execution."""
+    evidence = ActionEvidence.model_validate(result)
+    if (
+        evidence.action != action
+        or evidence.product_id != product_id
+        or evidence.simulated is not True
+        or evidence.outcome != outcome
+        or (outcome != "state_change_verified" and evidence.request_id is None)
+    ):
+        raise ValueError("unverified_action_result")
+    return evidence.model_dump(exclude_none=True)

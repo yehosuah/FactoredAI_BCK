@@ -235,8 +235,8 @@ See [actual aggregate source audit](service-agents-audit.md) for grounded data l
 Tools: `create_handoff` takes `{triage, idempotency_key}`; `get_handoff` takes
 `{handoff_id}`. Both use the existing server-owned `ExecutionContext`, freshly
 validate customer sessions and return `{ok, data}` or the existing fixed error
-envelope. `persisted=true` confirms case persistence only. Card-action evidence
-keeps its existing `verified=true` contract; no tool lets a model accept/resolve,
+envelope. `persisted=true` confirms case persistence only. Card-action tools now prepare confirmations; committed evidence after customer
+confirmation keeps its `verified=true` contract (see [confirmation](action-confirmation.md)); no tool lets a model accept/resolve,
 select agents, inject identity, priorities or verified facts.
 
 The orchestrator must keep tokens outside prompts, validate structured output,
