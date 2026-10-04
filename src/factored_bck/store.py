@@ -11,7 +11,14 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from factored_bck.security import next_state, password_hash, password_matches, token_digest
+from factored_bck.pagination import MovementCursor
+from factored_bck.security import (
+    DUMMY_PASSWORD_HASH,
+    next_state,
+    password_hash,
+    password_matches,
+    token_digest,
+)
 
 CARD_TYPES = ("Tarjeta Crédito", "Tarjeta Débito")
 SOURCE_CONTRACT_VERSION = "card-support-etl-v1"
@@ -90,12 +97,28 @@ class Store:
             )
             if self.settings.demo_password_file:
                 pw = self.settings.demo_password_file.read_text().strip()
-                if not pw or len(pw) < 12:
+                if not 12 <= len(pw) <= 200:
                     raise ValueError("invalid_demo_secret")
-                pg.execute(
-                    "INSERT INTO simulator.users VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                    ("demo", password_hash(pw), "TEAM-CUSTOMER-001", "team_synthetic"),
-                )
+                demo = pg.execute(
+                    "SELECT * FROM simulator.users WHERE username='demo' FOR UPDATE"
+                ).fetchone()
+                if demo is None:
+                    pg.execute(
+                        "INSERT INTO simulator.users VALUES(%s,%s,%s,%s)",
+                        ("demo", password_hash(pw), "TEAM-CUSTOMER-001", "team_synthetic"),
+                    )
+                else:
+                    if (demo["customer_id"], demo["source_kind"]) != (
+                        "TEAM-CUSTOMER-001",
+                        "team_synthetic",
+                    ):
+                        raise ValueError("demo_identity_conflict")
+                    if not password_matches(pw, demo["password_hash"]):
+                        pg.execute(
+                            "UPDATE simulator.users SET password_hash=%s WHERE username='demo'",
+                            (password_hash(pw),),
+                        )
+                        pg.execute("DELETE FROM simulator.sessions WHERE username='demo'")
                 fixtures = [
                     ("TEAM-CARD-ACTIVE", "ACTIVE"),
                     ("TEAM-CARD-PAUSED", "PAUSED"),
@@ -165,10 +188,15 @@ class Store:
                 (subject,),
             ).fetchone()
             user = pg.execute(
-                "SELECT * FROM simulator.users WHERE username=%s", (username,)
+                "SELECT * FROM simulator.users WHERE username=%s FOR UPDATE", (username,)
             ).fetchone()
             allowed = attempt["attempts"] <= 10
-            valid = user is not None and password_matches(password, user["password_hash"])
+            # Always perform scrypt, including unknown usernames. The user lock keeps
+            # session issuance atomic with credential rotation and session revocation.
+            matched = password_matches(
+                password, user["password_hash"] if user is not None else DUMMY_PASSWORD_HASH
+            )
+            valid = user is not None and matched
             if not allowed or not valid:
                 pg.commit()  # Failed attempts must persist before raising an HTTP exception.
                 raise HTTPException(429 if not allowed else 401)
@@ -264,21 +292,69 @@ class Store:
                 "card": self._card(pg, release_id, user["customer_id"], product_id),
             }
 
-    def movements(self, user, product_id, limit, before_date):
+    def movements(self, user, product_id, limit, before_date, cursor=None):
+        continuation = MovementCursor.decode(cursor) if cursor is not None else None
         with self.release() as (pg, release_id):
             self._card(pg, release_id, user["customer_id"], product_id)
+            seek = ""
+            params = [release_id, user["customer_id"], product_id]
+            if continuation is not None:
+                if (continuation.customer_id, continuation.product_id) != (
+                    user["customer_id"],
+                    product_id,
+                ):
+                    raise HTTPException(422)
+                if continuation.release_id != release_id:
+                    # Never silently mix releases while continuing a historical page.
+                    raise HTTPException(409)
+                if before_date is not None and before_date != continuation.before_date:
+                    raise HTTPException(422)
+                before_date = continuation.before_date
+                seek = (
+                    "AND (process_date<%s OR (process_date=%s AND transaction_date<%s) "
+                    "OR (process_date=%s AND transaction_date=%s AND transaction_id>%s)) "
+                )
+            params.extend([before_date, before_date])
+            if continuation is not None:
+                params.extend(
+                    [
+                        continuation.process_date,
+                        continuation.process_date,
+                        continuation.transaction_date,
+                        continuation.process_date,
+                        continuation.transaction_date,
+                        continuation.transaction_id,
+                    ]
+                )
+            params.append(limit + 1)
             rows = pg.execute(
                 "SELECT transaction_id,transaction_date,process_date,amount,currency,"
                 "transaction_type,transaction_status,merchant_name FROM bank.transactions "
                 "WHERE release_id=%s AND customer_id=%s AND product_id=%s "
                 "AND (%s::date IS NULL OR process_date<%s::date) "
-                "ORDER BY process_date DESC,transaction_date DESC,transaction_id LIMIT %s",
-                (release_id, user["customer_id"], product_id, before_date, before_date, limit),
+                + seek
+                + "ORDER BY process_date DESC,transaction_date DESC,transaction_id LIMIT %s",
+                params,
             ).fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            next_cursor = None
+            if has_more:
+                last = rows[-1]
+                next_cursor = MovementCursor(
+                    release_id=release_id,
+                    customer_id=user["customer_id"],
+                    product_id=product_id,
+                    before_date=before_date,
+                    process_date=last["process_date"],
+                    transaction_date=last["transaction_date"],
+                    transaction_id=last["transaction_id"],
+                ).encode()
             return {
                 "release_id": release_id,
                 "semantics": "historical_source_movements",
                 "movements": encode(rows),
+                "next_cursor": next_cursor,
             }
 
     def action(self, user, product_id, action, idem_key, transaction_id=None, process_date=None):
