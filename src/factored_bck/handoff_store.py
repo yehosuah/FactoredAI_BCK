@@ -204,10 +204,12 @@ class HandoffStore:
     def list(self, token, limit=20, offset=0, *, agent=False):
         if not 1 <= limit <= 100 or not 0 <= offset <= 10000:
             raise HTTPException(422)
-        identity = self.agents.session(token)["agent_id"] if agent else self._customer(token)
+        identity = None if agent else self._customer(token)
         # Column comes only from the trusted method flag, never external SQL or tool arguments.
         column = "assigned_agent_id" if agent else "customer_id"
         with self.store.connect() as pg:
+            if agent:
+                identity = self.agents.session(token, connection=pg, lock=True)["agent_id"]
             rows = pg.execute(
                 f"SELECT * FROM simulator.handoffs WHERE {column}=%s "
                 "ORDER BY (routing->'service_priority'->>'severity_rank')::int DESC, "
@@ -223,8 +225,8 @@ class HandoffStore:
         }
 
     def agent_get(self, token, handoff_id):
-        agent_id = self.agents.session(token)["agent_id"]
         with self.store.connect() as pg:
+            agent_id = self.agents.session(token, connection=pg, lock=True)["agent_id"]
             row = pg.execute(
                 "SELECT * FROM simulator.handoffs WHERE handoff_id=%s AND assigned_agent_id=%s",
                 (handoff_id, agent_id),

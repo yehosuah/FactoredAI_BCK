@@ -29,9 +29,13 @@ credentials, not enterprise IAM or proof of real employment.
 
 Agent provisioning and successful login hold the shared publisher transaction lock
 from accepted-source eligibility through account/session commit. In-flight
-publication returns 503 / Retry-After: 1 without committing credentials. Ordinary
-session reads remain fresh source checks; subsequent accepted-source ineligibility
-still denies session use.
+publication returns 503 / Retry-After: 1 without committing credentials. Agent session authorization also pins the accepted source while checking
+current eligibility. Agent case get/list perform transactional session/account
+authorization in the same connection as the protected query, retaining the shared
+publisher lock through read commit. Target-state replays likewise retain the pin
+through their existing transactional reauthentication; they skip only case-specific
+suitability. Busy publication fails these reads/replays closed with 503; removed/
+inactive current-source agents remain denied.
 
 `handoffs` stores customer scope and creating username from authentication,
 canonical triage, original source release, assignment, lifecycle timestamps,

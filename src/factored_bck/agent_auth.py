@@ -83,7 +83,7 @@ class AgentAuth:
                 + (" FOR SHARE OF s,u" if lock else ""),
                 (token_digest(token),),
             ).fetchone()
-            if not account or not self._eligible(pg, account["agent_id"]):
+            if not account or not self._eligible(pg, account["agent_id"], pin=True):
                 raise HTTPException(401)
         return account
 
