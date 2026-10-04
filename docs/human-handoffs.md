@@ -224,7 +224,9 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    ACLs: elevated attributes, parent memberships, ownership/default/policy dependencies,
    other database/object grants, whole-table/contact/write privileges and grant
    options are rejected. Existing members must be only the explicitly configured
-   backend login, without ADMIN OPTION; unrelated LOGIN/NOLOGIN members fail before
+   dedicated backend login, without ADMIN OPTION. The selected login must have
+   no members of its own, including NOLOGIN/SET-only members; this excludes all
+   transitive privilege propagation. Unrelated helper members fail before
    new columns can be exposed. Existing permissions are never revoked or repaired.
    Role names are identifier-quoted, and all changes commit atomically.
    The current ETL refresh revokes direct

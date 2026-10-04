@@ -181,3 +181,36 @@ def test_existing_reader_with_unexpected_members_cannot_expose_new_columns(
             "SELECT has_column_privilege('backend_handoff_reader','bank.customers',"
             "'customer_id','SELECT') AS allowed"
         ).fetchone()["allowed"]
+
+
+@pytest.mark.parametrize("membership", ["inherit", "nested", "set_only", "reapply"])
+def test_backend_login_cannot_transitively_expose_reader_to_other_roles(grant_store, membership):
+    if membership == "reapply":
+        apply(grant_store, "configured_backend")
+    with grant_store.connect() as pg:
+        if membership == "set_only":
+            pg.execute("GRANT configured_backend TO backend_api WITH INHERIT FALSE, SET TRUE")
+        else:
+            pg.execute("GRANT configured_backend TO backend_api")
+        if membership == "nested":
+            pg.execute("ALTER ROLE backend_api NOLOGIN")
+            pg.execute(sql.SQL("GRANT backend_api TO {}").format(sql.Identifier(QUOTED_ROLE)))
+        if membership == "reapply":
+            pg.execute(
+                "REVOKE SELECT(languages) ON bank.service_agents FROM backend_handoff_reader"
+            )
+    with pytest.raises(psycopg.errors.RaiseException, match="backend_role_has_members"):
+        apply(grant_store, "configured_backend")
+    with grant_store.connect() as pg:
+        if membership == "reapply":
+            assert not pg.execute(
+                "SELECT has_column_privilege('backend_handoff_reader','bank.service_agents',"
+                "'languages','SELECT') AS allowed"
+            ).fetchone()["allowed"]
+        else:
+            assert (
+                pg.execute(
+                    "SELECT 1 FROM pg_roles WHERE rolname='backend_handoff_reader'"
+                ).fetchone()
+                is None
+            )

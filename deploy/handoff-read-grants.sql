@@ -14,6 +14,15 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname=backend_role AND rolcanlogin) THEN
         RAISE EXCEPTION 'backend_role_invalid';
     END IF;
+    -- The selected LOGIN must be a dedicated account, not a parent role. Reject
+    -- every direct member (including NOLOGIN/SET-only) to exclude its entire
+    -- descendant closure before restricted privileges can propagate transitively.
+    IF EXISTS (
+        SELECT FROM pg_auth_members
+        WHERE roleid=(SELECT oid FROM pg_roles WHERE rolname=backend_role)
+    ) THEN
+        RAISE EXCEPTION 'backend_role_has_members';
+    END IF;
     IF EXISTS (SELECT FROM pg_roles WHERE rolname='backend_handoff_reader' AND rolcanlogin) THEN
         RAISE EXCEPTION 'reader_must_be_nologin';
     END IF;
