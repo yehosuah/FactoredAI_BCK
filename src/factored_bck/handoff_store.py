@@ -260,6 +260,10 @@ class HandoffStore:
                 current_identity = self.agents.session(token, connection=pg, lock=True)["agent_id"]
             if current_identity != identity:
                 raise HTTPException(401)
+            # Replay recovers committed evidence; it does not perform a new transition.
+            # Current session/account/release membership was rechecked above.
+            if row["status"] == target:
+                return self._resource(row)
             if operation != "cancel":
                 eligibility = self._routing(
                     pg,
@@ -270,8 +274,6 @@ class HandoffStore:
                 )
                 if eligibility["assigned_agent_id"] is None:
                     raise HTTPException(409)
-            if row["status"] == target:
-                return self._resource(row)
             if row["status"] not in allowed:
                 raise HTTPException(409)
             row = pg.execute(

@@ -119,9 +119,14 @@ revalidate the session inside their write transaction, after any case/customer-l
 wait. Session/account locks prevent logout or disablement from racing a committed
 transition. A resolution records
 an assigned simulator agent's acknowledgement, not proof of refund or safe resolution.
-Agent transitions also recheck the full current routing requirements for this case
+New agent transitions also recheck the full current routing requirements for this case
 (including language, specialty and experience); loss of case suitability conflicts
 even when a generic agent session remains valid. Use local recovery to route safely.
+An already-committed target-state replay returns its original case after fresh
+transactional session authentication, before rerunning case-specific suitability.
+It does not update timestamps, reroute or execute a new transition. Disabled,
+expired, logged-out or source-ineligible agent sessions remain denied; replay is
+not an authentication bypass or permission to progress a now-unsuitable case.
 Wrong-owner reads/transitions return 404. Missing/expired/wrong-kind sessions return
 401; invalid input 422; idempotency conflicts 409; login limit 429; unexpected storage
 failure a sanitized 500 (or 503 for unavailable source contract). No failure returns

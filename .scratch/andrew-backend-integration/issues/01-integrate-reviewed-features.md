@@ -20,7 +20,7 @@ not to Andrew. The separate historical docs follow-up is outside this issue.
 - [x] Recover unavailable assigned/accepted agents with deterministic routing and audit.
 - [x] Reject unsafe/terminal recovery and retain original evidence/lifecycle history.
 - [x] Readiness detects missing handoff source-column privileges.
-- [x] Full `make check`: 306 passed, zero skips (32.37s); restricted startup/process/database restart.
+- [x] Full `make check`: 323 passed, zero skips (35.75s); restricted startup/process/database restart.
 
 Final-head security/code review and required GitHub checks are separate merge gates
 tracked on the integration PR; this issue closes the locally verified implementation.
@@ -30,3 +30,7 @@ desktop UI, historical docs publication or teammate branch rewrite is authorized
 
 - [x] Reproduce both final code-review cutover races on `30a73e9`; eight red-to-green
   regressions and shared accepted-publisher locking without source UPDATE grants.
+
+- [x] Reproduce P2 committed replay loss: eight failures on `c48505d`; recover the
+  unchanged target result after fresh transactional session/account/source auth.
+  Seventeen replay regressions cover suitability, release changes and revocation.
