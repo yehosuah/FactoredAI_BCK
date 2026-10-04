@@ -3,10 +3,14 @@
 from dataclasses import dataclass
 from datetime import date
 from types import MappingProxyType
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+
+from factored_bck.evidence import ActionEvidence
+from factored_bck.handoff import CreateHandoffArguments, GetHandoffArguments
+from factored_bck.handoff_store import HandoffStore
 
 ProductId = Annotated[str, Field(min_length=1, max_length=100, pattern=r"\S")]
 DateString = Annotated[str, Field(min_length=10, max_length=10, pattern=r"^\d{4}-\d{2}-\d{2}$")]
@@ -54,27 +58,6 @@ class ChargeArguments(ActionArguments):
         return value
 
 
-class _ActionEvidence(BaseModel):
-    # Allowlist output fields; never pass through unexpected store metadata or credentials.
-    model_config = ConfigDict(strict=True, extra="ignore", hide_input_in_errors=True)
-    action_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-    product_id: ProductId
-    action: str
-    status: Literal["succeeded"]
-    outcome: Literal[
-        "state_change_verified",
-        "replacement_request_registered",
-        "request_registered_for_human_review",
-    ]
-    simulator_state: Literal[
-        "ACTIVE", "PAUSED", "PENDING_ACTIVATION", "BLOCKED", "CLOSED", "INELIGIBLE"
-    ]
-    simulated: bool
-    source_kind: Literal["team_synthetic", "organizer_synthetic"]
-    release_id: str = Field(min_length=1, max_length=200)
-    request_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
-
-
 @dataclass(frozen=True)
 class _Tool:
     arguments: type[BaseModel]
@@ -85,6 +68,13 @@ class _Tool:
 
 _TOOLS = MappingProxyType(
     {
+        "create_handoff": _Tool(
+            CreateHandoffArguments,
+            "Persist triage and route to a human; queued or assigned is not accepted or resolved.",
+        ),
+        "get_handoff": _Tool(
+            GetHandoffArguments, "Read an owned persisted handoff and its lifecycle."
+        ),
         "get_cards": _Tool(NoArguments, "List the authenticated customer's historical cards."),
         "get_card": _Tool(CardArguments, "Read one owned card and its simulated state."),
         "get_movements": _Tool(
@@ -138,8 +128,9 @@ class ToolDispatcher:
     The Store dependency is trusted backend code, never caller-supplied tool data.
     """
 
-    def __init__(self, store):
+    def __init__(self, store, handoffs=None):
         self._store = store
+        self._handoffs = handoffs if handoffs is not None else HandoffStore(store)
 
     def catalog(self):
         """Fresh provider-neutral JSON schemas, with no execution context or credentials."""
@@ -147,7 +138,7 @@ class ToolDispatcher:
             {
                 "name": name,
                 "description": tool.description,
-                "mutating": tool.action is not None,
+                "mutating": tool.action is not None or name == "create_handoff",
                 "input_schema": tool.arguments.model_json_schema(),
             }
             for name, tool in _TOOLS.items()
@@ -185,17 +176,23 @@ class ToolDispatcher:
                     else None,
                 )
                 return self._verified_action(tool, inputs.product_id, evidence)
-            if name == "get_cards":
+            if name == "create_handoff":
+                data = self._handoffs.create(token, inputs)
+            elif name == "get_handoff":
+                data = self._handoffs.get(token, inputs.handoff_id)
+            elif name == "get_cards":
                 data = self._store.cards(principal)
             elif name == "get_card":
                 data = self._store.card(principal, inputs.product_id)
-            else:  # The only remaining registered read is get_movements.
+            elif name == "get_movements":
                 data = self._store.movements(
                     principal,
                     inputs.product_id,
                     inputs.limit,
                     date.fromisoformat(inputs.before_date) if inputs.before_date else None,
                 )
+            else:
+                return _failure("invalid_tool")
             return {"ok": True, "data": data}
         except HTTPException as exc:
             code = {
@@ -215,7 +212,7 @@ class ToolDispatcher:
     @staticmethod
     def _verified_action(tool, product_id, result):
         try:
-            evidence = _ActionEvidence.model_validate(result)
+            evidence = ActionEvidence.model_validate(result)
         except ValidationError:
             return _failure("unverified_result")
         if (

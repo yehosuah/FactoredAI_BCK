@@ -135,3 +135,11 @@ Esto no cambia la arquitectura ni los manifiestos. Una reparación local alterna
 es quitar el flag macOS `hidden` del archivo
 `.venv/lib/python3.13/site-packages/_editable_impl_factored_bck.pth` con `chflags nohidden`
 y verificar el import sin `PYTHONPATH`; no se aplica como parte de esta función.
+
+## Casos humanos persistentes
+
+La sección `handoffs` agrega casos confirmados de `simulator.handoffs`, con conteos
+de asignación, severidad, motivo, piso de experiencia, fallback y critical_review.
+Mantiene el mismo acceso global autenticado y reporta unavailable si falla SQL.
+No expone IDs, texto ni contactos. Asignación incluye casos terminales y no prueba
+resolución. Ver [semántica de handoffs](human-handoffs.md).

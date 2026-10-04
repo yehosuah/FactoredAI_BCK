@@ -56,9 +56,10 @@ def backend():
     return store
 
 
+@pytest.mark.parametrize("name", ["get_cards", "create_handoff", "get_handoff"])
 @pytest.mark.parametrize("context", [None, {}, PRINCIPAL, {"session_token": TOKEN}])
-def test_untrusted_or_missing_context_is_rejected(backend, context):
-    result = ToolDispatcher(backend).execute("get_cards", {}, context=context)
+def test_untrusted_or_missing_context_is_rejected(backend, context, name):
+    result = ToolDispatcher(backend).execute(name, {}, context=context)
     assert result["error"]["code"] == "unauthenticated"
     backend.session.assert_not_called()
     backend.cards.assert_not_called()
@@ -240,6 +241,8 @@ def test_catalog_is_safe_and_cannot_register_tools(backend):
         "get_cards",
         "get_card",
         "get_movements",
+        "create_handoff",
+        "get_handoff",
         *ACTION_NAMES,
     }
     for item in catalog:
@@ -248,7 +251,7 @@ def test_catalog_is_safe_and_cannot_register_tools(backend):
     assert "session_token" not in json.dumps(catalog)
     catalog[0]["name"] = "refund"
     catalog[0]["input_schema"]["additionalProperties"] = True
-    assert dispatcher.catalog()[0]["name"] == "get_cards"
+    assert dispatcher.catalog()[0]["name"] == "create_handoff"
     assert dispatcher.catalog()[0]["input_schema"]["additionalProperties"] is False
 
 

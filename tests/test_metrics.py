@@ -225,7 +225,7 @@ def test_endpoint_separates_metrics_and_polling_does_not_count_itself():
             assert response.headers["cache-control"] == "no-store"
             assert response.headers["x-request-id"]
             body = response.json()
-            assert set(body) == {"http", "card_actions", "limitations"}
+            assert set(body) == {"http", "card_actions", "handoffs", "limitations"}
             assert body["http"]["total_requests"] == 1
             assert body["http"]["latency_ms"]["p95"] == 125
             assert body["card_actions"]["total_committed"] == 3

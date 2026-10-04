@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from factored_bck.handoff_schema import SCHEMA as HANDOFF_SCHEMA
 from factored_bck.security import next_state, password_hash, password_matches, token_digest
 
 CARD_TYPES = ("Tarjeta Crédito", "Tarjeta Débito")
@@ -138,6 +139,8 @@ class Store:
                         "team_synthetic",
                     ),
                 )
+
+            pg.execute(HANDOFF_SCHEMA)
 
     def ready(self):
         with self.connect() as pg:

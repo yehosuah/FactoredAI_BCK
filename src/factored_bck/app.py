@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 
+from factored_bck.handoff_routes import router as handoff_router
+from factored_bck.handoff_store import HandoffStore
 from factored_bck.metrics import HttpMetrics
 from factored_bck.routes import router
 from factored_bck.settings import Settings
@@ -60,10 +62,14 @@ def create_app(settings: Settings | None = None, store=None, metrics=None) -> Fa
     )
     app.state.settings = config
     app.state.store = data_store
-    app.state.tools = ToolDispatcher(data_store) if data_store is not None else None
+    app.state.handoffs = HandoffStore(data_store) if data_store is not None else None
+    app.state.tools = (
+        ToolDispatcher(data_store, app.state.handoffs) if data_store is not None else None
+    )
     app.state.metrics = metrics if metrics is not None else HttpMetrics()
     if data_store is not None:
         app.include_router(router)
+        app.include_router(handoff_router)
 
     @app.middleware("http")
     async def identify_request(request: Request, call_next):

@@ -129,9 +129,14 @@ def metrics(request: Request, response: Response, _principal: Principal, db: DB)
         actions = db.action_metrics()
     except Exception:
         actions = {"status": "unavailable", "reason": "aggregation_unavailable"}
+    try:
+        handoffs = request.app.state.handoffs.metrics()
+    except Exception:
+        handoffs = {"status": "unavailable", "reason": "aggregation_unavailable"}
     return {
         "http": http,
         "card_actions": actions,
+        "handoffs": handoffs,
         "limitations": [
             "HTTP metrics are best-effort, per application instance and reset on restart",
             "HTTP counters and bounded recent latency samples have different windows",
@@ -142,5 +147,6 @@ def metrics(request: Request, response: Response, _principal: Principal, db: DB)
             "HTTP success and committed simulated actions do not establish safe resolution",
             "No refund, issuance, shipping or fraud decision is asserted",
             "HTTP and database snapshots are not atomic with each other",
+            "Handoff counts cover all customers; assigned does not mean accepted or resolved",
         ],
     }

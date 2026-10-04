@@ -4,14 +4,14 @@
 
 `ToolDispatcher` es una abstracción interna y síncrona, independiente de proveedores.
 No añade rutas HTTP, modelos externos, registro de usuarios, dispatch arbitrario
-ni lógica de entrega a humanos. Reutiliza `Store.session`, `cards`, `card`,
-`movements` y `action`. El Store sigue siendo responsable de propiedad,
+ni selección arbitraria de agentes. Reutiliza `Store.session`, `cards`, `card`,
+`movements` y `action`, y `HandoffStore` para casos persistentes. El Store sigue siendo responsable de propiedad,
 elegibilidad, transacciones, verificación de cambios e idempotencia.
 
 La aplicación expone `app.state.tools` cuando dispone de Store; en modo sin datos
 es `None`. También se puede construir `ToolDispatcher(store)` dentro de código
 backend confiable. El Store debe estar inicializado mediante el ciclo de vida
-existente. `catalog()` devuelve nueve nombres estables, descripciones,
+existente. `catalog()` devuelve once nombres estables, descripciones,
 `mutating` y esquemas JSON de entrada, sin formato de un proveedor particular.
 Modificar el catálogo devuelto no cambia el registro de ejecución.
 
@@ -42,7 +42,7 @@ registrar el token mediante extracción manual de `SecretStr`.
 Las entradas son diccionarios con modelos Pydantic estrictos: campos extra
 prohibidos, sin conversión de números a strings o de strings/bools a enteros.
 Se rechazan `customer_id`, `session_token`, `action`, nombres de métodos, SQL,
-cuerpos anidados y otros campos no declarados. El token viaja solo en `context`,
+objetos anidados no declarados y otros campos no declarados. El token viaja solo en `context`,
 nunca en los argumentos. Nombre de herramienta: máximo 64 caracteres y miembro
 exacto del catálogo; no hay `getattr`, `eval`, imports dinámicos ni registro público.
 
@@ -159,3 +159,13 @@ argumentos del modelo como no confiables, evitar enviar credenciales al modelo y
 limitar los datos bancarios compartidos conforme al permiso del usuario. Solo puede
 anunciar una acción realizada cuando recibe `ok=true`, `verified=true` y evidencia
 coincidente, conservando siempre el significado **simulado** y las limitaciones.
+
+## Herramientas de handoff
+
+`create_handoff` es mutating y acepta `{triage, idempotency_key}`; `get_handoff`
+acepta `{handoff_id}`. Triage es el único objeto anidado nuevo permitido.
+Reutilizan autenticación, persistencia y routing de `HandoffStore`, sin admitir
+`customer_id` ni `agent_id`. Devuelven `ok=true,data.persisted=true` solo tras
+confirmación; queued/assigned no prueba transferencia, aceptación ni resolución.
+Los replays devuelven el estado actual del mismo caso. Véase el
+[contrato completo](human-handoffs.md) para schemas, estados, evidencia y despliegue.

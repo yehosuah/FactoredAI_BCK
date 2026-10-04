@@ -160,7 +160,7 @@ como contexto independiente y configura PostgreSQL y secretos en ejecución.
 
 ## Observabilidad operativa
 
-`GET /operations/metrics` separa `http`, `card_actions` y `limitations`. Cualquier
+`GET /operations/metrics` separa `http`, `card_actions`, `handoffs` y `limitations`. Cualquier
 sesión válida puede consultar estos agregados globales, como en `/operations/etl`.
 HTTP incluye conteos por método/plantilla y clase de estado, fallos 4xx/5xx, tasa
 de error y p50/p95 en milisegundos de hasta 1024 muestras recientes por grupo.
@@ -179,7 +179,7 @@ para interpretar la respuesta y las limitaciones de esta implementación.
 `app.state.tools` ofrece un `ToolDispatcher` interno cuando está habilitado el Store.
 Su catálogo fijo contiene `get_cards`, `get_card`, `get_movements`, `block_card`,
 `pause_card`, `reactivate_card`, `activate_card`, `request_replacement` y
-`register_unrecognized_charge`. Revalida la sesión en cada llamada, rechaza
+`register_unrecognized_charge`, además de `create_handoff` y `get_handoff`. Revalida la sesión en cada llamada, rechaza
 `customer_id` en argumentos y reutiliza la propiedad, idempotencia y evidencia del
 Store. Las acciones solo devuelven éxito verificado tras recibir evidencia válida
 del backend. No se añade un endpoint HTTP de herramientas ni un proveedor LLM.
@@ -212,3 +212,16 @@ de ambos checkouts.
 `escribir-spec` y `partir-en-tickets` leerán esta configuración.
 Puedes editar `docs/agents/*.md` directamente. Vuelve a ejecutar `configurar-desarrollo`
 solo cuando cambies de gestor de issues.
+
+## Handoffs humanos persistentes
+
+El backend persiste triage, evidencia propia y asignación determinista a agentes
+Digital/Hybrid aprovisionados. Sesiones de cliente y agente son independientes.
+`POST/GET /me/handoffs` y las rutas `/agent/handoffs` comparten el módulo con las
+herramientas internas. `GET /me/handoff` conserva su contrato de historial.
+Asignado no significa disponible, aceptado ni resuelto.
+
+Consulta [contrato, política, endpoints y despliegue](docs/human-handoffs.md) y
+[datos reales inspeccionados](docs/service-agents-audit.md). El despliegue requiere
+permisos de lectura por columnas y cuentas de agentes; el chequeo de desarrollo
+no sustituye ese preflight. Senior para critical está deshabilitado por defecto.

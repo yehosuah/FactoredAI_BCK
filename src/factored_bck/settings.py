@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from factored_bck.handoff import Reason
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -23,3 +25,4 @@ class Settings(BaseSettings):
     db_password_file: Path | None = None
     demo_password_file: Path | None = None
     session_seconds: int = Field(default=3600, ge=60, le=86400)
+    critical_senior_fallback_reasons: list[Reason] = Field(default_factory=list, max_length=7)

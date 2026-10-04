@@ -1,5 +1,6 @@
 # Decisiones de arquitectura del backend
 
-Registra aquí las decisiones que cumplan los criterios de `../agents/dominio.md`.
-Todavía no hay decisiones de arquitectura registradas. El stack inicial acordado
-(Python, FastAPI y uv) y su ejecución local/Docker están documentados en el README principal.
+Registra decisiones conforme a `../agents/dominio.md`.
+
+- [0001 — Estado simulado independiente del ETL](0001-estado-simulado-independiente.md)
+- [0002 — Handoffs persistentes y routing digital](0002-persistent-human-handoffs.md)
