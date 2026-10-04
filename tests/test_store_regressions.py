@@ -152,6 +152,82 @@ def test_unknown_and_wrong_password_both_run_password_verification(regression_st
     assert all(value.startswith("scrypt:") for value in calls)
 
 
+def test_rotating_usernames_cannot_bypass_peer_budget(regression_store, monkeypatch):
+    from factored_bck import store as module
+
+    calls = []
+    monkeypatch.setattr(module, "password_matches", lambda *args: calls.append(args) or False)
+    for index in range(35):
+        status(
+            lambda index=index: regression_store.login(f"missing-{index}", "wrong", "peer-a"),
+            401 if index < 30 else 429,
+        )
+    assert len(calls) == 30
+    status(lambda: regression_store.login("demo", "wrong", "peer-a"), 429)
+    assert len(calls) == 30
+    status(lambda: regression_store.login("missing", "wrong", "peer-b"), 401)
+    assert len(calls) == 31
+
+
+def test_rotating_peers_cannot_bypass_global_budget(regression_store, monkeypatch):
+    from factored_bck import store as module
+
+    calls = []
+    monkeypatch.setattr(module, "password_matches", lambda *args: calls.append(args) or False)
+    for index in range(125):
+        status(
+            lambda index=index: regression_store.login(
+                f"missing-{index}", "wrong", f"peer-{index}"
+            ),
+            401 if index < 120 else 429,
+        )
+    assert len(calls) == 120
+    status(lambda: regression_store.login("demo", "wrong", "new-peer"), 429)
+    assert len(calls) == 120
+    with regression_store.connect() as pg:
+        pg.execute("UPDATE simulator.login_attempts SET window_start=now()-interval '6 minutes'")
+    status(lambda: regression_store.login("demo", "wrong", "new-peer"), 401)
+    assert len(calls) == 121
+
+
+def test_kdf_concurrency_is_bounded_across_store_instances(regression_store, monkeypatch):
+    from threading import Event
+
+    from factored_bck import store as module
+
+    entered, release = Event(), Event()
+    calls = []
+
+    def verify(*args):
+        calls.append(args)
+        entered.set()
+        assert release.wait(5)
+        return False
+
+    monkeypatch.setattr(module, "password_matches", verify)
+    other_store = Store(regression_store.settings)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(regression_store.login, "missing", "wrong", "peer-a")
+        assert entered.wait(5)
+        try:
+            status(lambda: other_store.login("demo", "wrong", "peer-b"), 429)
+            status(lambda: other_store.login("another-missing", "wrong", "peer-c"), 429)
+            assert len(calls) == 1
+        finally:
+            release.set()
+        with pytest.raises(HTTPException) as error:
+            first.result(timeout=5)
+        assert error.value.status_code == 401
+
+
+def test_successful_login_does_not_reset_peer_budget(regression_store):
+    for _ in range(30):
+        assert regression_store.login("demo", "old-team-password", "peer-a")["access_token"]
+    status(lambda: regression_store.login("demo", "old-team-password", "peer-a"), 429)
+    status(lambda: regression_store.login("missing", "wrong", "peer-a"), 429)
+    assert regression_store.login("demo", "old-team-password", "peer-b")["access_token"]
+
+
 def seed_movements(store):
     with store.connect() as pg:
         # Many same-day, same-time rows and one older day, all controlled fixtures.

@@ -150,6 +150,16 @@ Al reiniciar con una contraseña demo diferente (12–200 caracteres), se actual
 hash y se revocan las sesiones demo en una sola transacción. Reiniciar con la misma
 contraseña conserva sus sesiones; la rotación no reinicia estados ni auditoría.
 
+Antes de verificar contraseñas, el login admite como máximo una verificación
+simultánea por base PostgreSQL mediante un lock transaccional no bloqueante.
+Las ventanas persistentes de cinco minutos permiten 30 intentos por peer y 120
+globales, además del límite de 10 fallos por usuario/peer. Cambiar el nombre de
+usuario no evita estos límites; login exitoso no borra los presupuestos peer/global.
+Saturación devuelve 429 antes de consultar usuarios o ejecutar scrypt, tanto para
+cuentas existentes como inexistentes. El peer es la dirección que ve el servidor;
+tras un proxy compartido se comparte ese presupuesto. Son límites conservadores
+del simulador, no una política de disponibilidad para producción.
+
 | Ruta | Comportamiento |
 | --- | --- |
 | `POST /auth/login`, `POST /auth/logout` | Sesión opaca, expirable y revocable de prueba |

@@ -22,6 +22,9 @@ from factored_bck.security import (
 
 CARD_TYPES = ("Tarjeta Crédito", "Tarjeta Débito")
 SOURCE_CONTRACT_VERSION = "card-support-etl-v1"
+LOGIN_KDF_LOCK = 7236148203
+LOGIN_PEER_LIMIT = 30
+LOGIN_GLOBAL_LIMIT = 120
 STATE_MAP = {
     "Active": "ACTIVE",
     "Closed": "CLOSED",
@@ -175,31 +178,56 @@ class Store:
             raise HTTPException(503)
         return row["release_id"]
 
+    @staticmethod
+    def _login_attempt(pg, subject):
+        return pg.execute(
+            "INSERT INTO simulator.login_attempts VALUES(%s,1,now()) "
+            "ON CONFLICT(subject_hash) DO UPDATE SET attempts=CASE WHEN "
+            "simulator.login_attempts.window_start<now()-interval '5 minutes' "
+            "THEN 1 ELSE simulator.login_attempts.attempts+1 END, window_start=CASE "
+            "WHEN simulator.login_attempts.window_start<now()-interval '5 minutes' "
+            "THEN now() ELSE simulator.login_attempts.window_start END RETURNING attempts",
+            (subject,),
+        ).fetchone()["attempts"]
+
     def login(self, username, password, peer):
-        subject = token_digest(username + "|" + peer)
+        subject = token_digest("login:user:" + username + "|" + peer)
+        global_subject = token_digest("login:global")
         with self.connect() as pg:
-            attempt = pg.execute(
-                "INSERT INTO simulator.login_attempts VALUES(%s,1,now()) "
-                "ON CONFLICT(subject_hash) DO UPDATE SET attempts=CASE WHEN "
-                "simulator.login_attempts.window_start<now()-interval '5 minutes' "
-                "THEN 1 ELSE simulator.login_attempts.attempts+1 END, window_start=CASE "
-                "WHEN simulator.login_attempts.window_start<now()-interval '5 minutes' "
-                "THEN now() ELSE simulator.login_attempts.window_start END RETURNING attempts",
-                (subject,),
+            # Cross-worker, nonblocking admission: at most one login KDF in this
+            # database. Rejections precede user lookup and treat all names equally.
+            admitted = pg.execute(
+                "SELECT pg_try_advisory_xact_lock(%s) AS admitted", (LOGIN_KDF_LOCK,)
+            ).fetchone()["admitted"]
+            if not admitted:
+                raise HTTPException(429)
+            global_attempt = pg.execute(
+                "SELECT attempts FROM simulator.login_attempts WHERE subject_hash=%s "
+                "AND window_start>=now()-interval '5 minutes'",
+                (global_subject,),
             ).fetchone()
+            if global_attempt and global_attempt["attempts"] >= LOGIN_GLOBAL_LIMIT:
+                raise HTTPException(429)
+            peer_attempts = self._login_attempt(pg, token_digest("login:peer:" + peer))
+            if peer_attempts > LOGIN_PEER_LIMIT:
+                pg.commit()
+                raise HTTPException(429)
+            self._login_attempt(pg, global_subject)
+            if self._login_attempt(pg, subject) > 10:
+                pg.commit()
+                raise HTTPException(429)
             user = pg.execute(
                 "SELECT * FROM simulator.users WHERE username=%s FOR UPDATE", (username,)
             ).fetchone()
-            allowed = attempt["attempts"] <= 10
-            # Always perform scrypt, including unknown usernames. The user lock keeps
+            # Admitted attempts perform scrypt, including unknown usernames. The user lock keeps
             # session issuance atomic with credential rotation and session revocation.
             matched = password_matches(
                 password, user["password_hash"] if user is not None else DUMMY_PASSWORD_HASH
             )
             valid = user is not None and matched
-            if not allowed or not valid:
+            if not valid:
                 pg.commit()  # Failed attempts must persist before raising an HTTP exception.
-                raise HTTPException(429 if not allowed else 401)
+                raise HTTPException(401)
             token = secrets.token_urlsafe(32)
             expiry = datetime.now(UTC) + timedelta(seconds=self.settings.session_seconds)
             pg.execute(
