@@ -1,6 +1,7 @@
 """Local administrator preflight, account provisioning and deterministic queue retry."""
 
 import argparse
+import getpass
 import os
 from pathlib import Path
 
@@ -19,6 +20,9 @@ def main(argv=None):
     provision.add_argument("--password-file", required=True, type=Path)
     reroute = commands.add_parser("reroute")
     reroute.add_argument("--handoff-id", required=True)
+    recover = commands.add_parser("recover")
+    recover.add_argument("--handoff-id", required=True)
+    recover.add_argument("--reason", required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -33,6 +37,11 @@ def main(argv=None):
         elif args.command == "reroute":
             result = service.reroute(args.handoff_id)
             print("Routing result: " + result["status"])
+        elif args.command == "recover":
+            result = service.recover(
+                args.handoff_id, reason=args.reason, authority="local-admin:" + getpass.getuser()
+            )
+            print("Recovery result: " + result["status"])
         print("Operation completed. No credentials or case contents are printed.")
         return 0
     except Exception as exc:

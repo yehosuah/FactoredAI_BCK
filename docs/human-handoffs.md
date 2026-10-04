@@ -8,14 +8,15 @@ public tool execution route, external ticket system or automatic bank operation.
 
 `handoff.py` holds typed triage and a deterministic pure routing function.
 `HandoffStore` owns authenticated creation, database transactions, evidence capture,
-case access, transitions, queue retry and aggregate metrics. HTTP routes and the
+case access, transitions, queue retry, local recovery and aggregate metrics. HTTP routes and the
 controlled tool dispatcher share this implementation. `AgentAuth` resolves a
 separate simulator identity; customer tokens do not authenticate agents and vice
 versa. All interfaces are synchronous; an async orchestrator must use a threadpool.
 
 `Store.initialize()` creates four additive tables under its existing advisory
 startup lock: `simulator.agent_users`, `agent_sessions`, `agent_login_attempts`,
-and `handoffs`. No ETL tables are changed. Credentials use existing salted scrypt,
+and `handoffs`. An additive `recovery_history` JSONB column on `handoffs` defaults
+to an empty array for existing cases. No ETL tables are changed. Credentials use existing salted scrypt,
 sessions are opaque with SHA-256 hashes at rest and existing session TTL. Login
 throttling uses the same 10 attempts / 5 minutes / username-and-peer pattern in a
 separate table. Agent session use rechecks enabled account, accepted-release
@@ -168,9 +169,59 @@ original evidence. If commit outcome is unknown, retry the same key and payload.
 Administrative `reroute` works only on queued cases, applies current accepted
 source/policy and cannot receive a chosen agent ID. It updates routing metadata
 and assignment atomically; original creation release and evidence remain unchanged.
-`routing.release_id` identifies the retry's source. There is no automatic rerouting
-of accepted/assigned work if an agent later becomes inactive; operator workflow for
-reassignment and human review remains a limitation, not an unsafe automatic fallback.
+`routing.release_id` identifies the retry's source.
+
+### Local administrative recovery (P08/P10 R1)
+
+`recover` handles stranded **assigned or accepted** cases only. It locks the handoff
+row, pins the current accepted release, and checks the current agent using the
+existing router on that agent alone. The enabled account, snapshot membership,
+Active status, Digital/Hybrid type, language, specialty, experience floor and
+configured critical Senior fallback all apply. A better-ranked agent or Premium
+preference alone never makes the current agent ineligible. Recovery rejects queued,
+resolved, cancelled and still-eligible cases with conflict (409 internally); a
+missing case returns 404. The local CLI reports a sanitized failure and exits 1.
+
+If the current agent is ineligible, the unchanged deterministic router selects a
+replacement from enabled provisioned accounts in that release. No eligible agent
+means `queued` in the existing `manual_review` or `critical_review` queue. No caller
+can select a replacement. A new assignment requires fresh acceptance; current
+`accepted_at` is cleared and `assigned_at` is reset (or null when queued).
+Original source release, request, model context, creation time and verified evidence
+are unchanged. Recovery neither executes nor modifies card actions.
+
+Each successful recovery appends one entry to `handoffs.recovery_history` in the
+same transaction as the state change. Entries retain previous agent/status,
+assignment and acceptance timestamps, previous routing, operator reason, local
+administrative authority, recovery source release, recovery timestamp, resulting
+status, agent or queue, and resulting routing metadata. Subsequent recovery, retry,
+acceptance, resolution and startup migration preserve this history. Rejections and
+rollbacks append nothing. Audit history is retained in the database for local
+administrative inspection; customer/agent resources and tools do not expose operator
+identity or recovery reasons. This is application-managed append-only history,
+not a tamper-proof log against a database administrator.
+
+The handoff `FOR UPDATE` lock serializes recovery with recovery, accept, resolve,
+cancel and queued retry. Account share locks prevent the checked old account from
+being re-enabled, or a selected account from being disabled, before commit. Source
+snapshots follow the existing immutable accepted-release contract; a new release
+published after the decision may require another recovery. The recovery timestamp
+is taken after lock acquisition. Success is returned only after commit.
+
+If recovery wins, a former agent's in-flight accept/resolve cannot update the new
+assignment. If acceptance wins, recovery records the accepted state and timestamp
+before replacing it. If resolution wins, recovery is rejected and no audit entry is
+added. Repeated concurrent attempts against the same unchanged source yield one
+recovery; the others reject the now eligible assignment or queued state. If a later
+source/account change strands the replacement, another recovery appends another
+entry.
+
+This operation exists only in the trusted local Python/CLI administrative interface,
+like provisioning and queued retry. It is absent from customer HTTP routes, agent
+self-service routes and the fixed ToolDispatcher/model catalogue. CLI authority is
+`local-admin:<OS username>` from the invoking environment; it is an operator label,
+not independently authenticated enterprise IAM. Protect local shell/database access.
+No automatic monitor or rerouting daemon is introduced.
 
 `GET /operations/metrics` adds `handoffs`, available to existing customer sessions.
 It includes service-wide `total_handoffs`, `assigned`, `unassigned`, `by_severity`,
@@ -225,6 +276,18 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    uv run --locked python -m factored_bck.handoff_admin reroute --handoff-id <case-id>
    ```
 
+7. To recover a stranded assigned or accepted case:
+
+   ```bash
+   uv run --locked python -m factored_bck.handoff_admin recover \
+     --handoff-id <case-id> --reason "Assigned agent disabled by administrator"
+   ```
+
+   Reason is required, nonblank, and at most 500 characters; authority is nonblank
+   and at most 200 characters. Do not include credentials or customer data. The CLI
+   prints only resulting status, never case contents, reason, authority or credentials.
+   There is no replacement-agent or authority override argument.
+
 There is no live database configured in this checkout, so deployment grants,
 account provisioning and a real accepted-release end-to-end smoke test remain
 operator configuration. Docker Compose integration was not exercised locally.
@@ -257,4 +320,9 @@ Premium preferences, critical fallback, CSAT/null ordering and stable tie-breaki
 Disposable PostgreSQL tests exercise both transports, real session isolation,
 scoped evidence, idempotent concurrency, lifecycle races, commit-time rollback,
 metrics/privacy and inherited least-privilege grants after ETL-style revocation.
-No test requires organizer records or the ETL checkout.
+Dedicated recovery tests also exercise disabled assigned/accepted agents, release
+eligibility changes, deterministic replacement and both review queues, persistent
+history/evidence, terminal and eligible rejections, transport exclusion, rollback,
+concurrent recovery and both lock orders for accept/resolve races. All database
+tests use the private synthetic PostgreSQL setup. No test requires organizer records
+or the ETL checkout.

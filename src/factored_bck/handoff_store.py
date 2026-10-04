@@ -29,7 +29,7 @@ class HandoffStore:
             raise HTTPException(401)
         return self.store.session(token)["customer_id"]
 
-    def _routing(self, pg, release_id, customer_id, triage):
+    def _routing(self, pg, release_id, customer_id, triage, *, stranded_agent_id=None):
         customer = pg.execute(
             "SELECT segment FROM bank.customers WHERE release_id=%s AND customer_id=%s",
             (release_id, customer_id),
@@ -42,6 +42,16 @@ class HandoffStore:
             "WHERE a.release_id=%s FOR SHARE OF u",
             (release_id,),
         ).fetchall()
+        if stranded_agent_id is not None:
+            # Eligibility is independent of ranking: a better candidate alone is not recovery.
+            current = route(
+                triage,
+                customer["segment"] if customer else None,
+                [a for a in agents if a["agent_id"] == stranded_agent_id],
+                self.store.settings.critical_senior_fallback_reasons,
+            )
+            if current["assigned_agent_id"] is not None:
+                raise HTTPException(409)
         result = route(
             triage,
             customer["segment"] if customer else None,
@@ -289,6 +299,74 @@ class HandoffStore:
                 ),
             ).fetchone()
         return self._resource(updated)
+
+    def recover(self, handoff_id, *, reason, authority):
+        """Trusted local admin only; no transport/tool may expose this operation.
+
+        Authority identifies the local operator, not a customer or agent credential.
+        The row lock serializes recovery with all existing lifecycle transitions.
+        """
+        for value, maximum in ((reason, 500), (authority, 200)):
+            if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+                raise ValueError("invalid_recovery_metadata")
+        with self.store.connect() as pg:
+            row = pg.execute(
+                "SELECT * FROM simulator.handoffs WHERE handoff_id=%s FOR UPDATE", (handoff_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(404)
+            if row["status"] not in ("assigned", "accepted"):
+                raise HTTPException(409)
+            # Include disabled accounts: re-enabling the old agent must wait for this decision.
+            pg.execute(
+                "SELECT agent_id FROM simulator.agent_users WHERE agent_id=%s FOR SHARE",
+                (row["assigned_agent_id"],),
+            ).fetchone()
+            routing = self._routing(
+                pg,
+                self.store._current(pg),
+                row["customer_id"],
+                Triage.model_validate(row["request_payload"]),
+                stranded_agent_id=row["assigned_agent_id"],
+            )
+            status = "assigned" if routing["assigned_agent_id"] is not None else "queued"
+            # clock_timestamp is evaluated after lock acquisition, unlike transaction-start now().
+            recovered_at = pg.execute("SELECT clock_timestamp() AS timestamp").fetchone()[
+                "timestamp"
+            ]
+            audit = encode(
+                {
+                    "previous_agent_id": row["assigned_agent_id"],
+                    "previous_status": row["status"],
+                    "previous_assigned_at": row["assigned_at"],
+                    "previous_accepted_at": row["accepted_at"],
+                    "previous_routing": row["routing"],
+                    "reason": reason,
+                    "authority": authority,
+                    "release_id": routing["release_id"],
+                    "recovered_at": recovered_at,
+                    "resulting_status": status,
+                    "resulting_agent_id": routing["assigned_agent_id"],
+                    "resulting_queue": routing["queue"],
+                    "resulting_routing": routing,
+                }
+            )
+            updated = pg.execute(
+                "UPDATE simulator.handoffs SET routing=%s,assigned_agent_id=%s,status=%s,"
+                "assigned_at=%s,accepted_at=NULL,updated_at=%s,"
+                "recovery_history=recovery_history || %s WHERE handoff_id=%s RETURNING *",
+                (
+                    Jsonb(routing),
+                    routing["assigned_agent_id"],
+                    status,
+                    recovered_at if status == "assigned" else None,
+                    recovered_at,
+                    Jsonb([audit]),
+                    handoff_id,
+                ),
+            ).fetchone()
+            result = self._resource(updated)
+        return result
 
     def metrics(self):
         with self.store.connect() as pg:
