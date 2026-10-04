@@ -1,6 +1,7 @@
 """Simulator agent credentials and sessions, separate from customer authentication."""
 
 import secrets
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
@@ -40,31 +41,20 @@ class AgentAuth:
             )
 
     def login(self, username, password, peer):
-        subject = token_digest(username + "|" + peer)
         with self.store.connect() as pg:
-            attempt = pg.execute(
-                "INSERT INTO simulator.agent_login_attempts VALUES(%s,1,now()) "
-                "ON CONFLICT(subject_hash) DO UPDATE SET attempts=CASE WHEN "
-                "simulator.agent_login_attempts.window_start<now()-interval '5 minutes' "
-                "THEN 1 ELSE simulator.agent_login_attempts.attempts+1 END, window_start=CASE "
-                "WHEN simulator.agent_login_attempts.window_start<now()-interval '5 minutes' "
-                "THEN now() ELSE simulator.agent_login_attempts.window_start END "
-                "RETURNING attempts",
-                (subject,),
-            ).fetchone()
+            subject = self.store._admit_login(pg, username, peer, namespace="agent")
             account = pg.execute(
                 "SELECT password_hash,agent_id,enabled FROM simulator.agent_users WHERE "
-                "username=%s",
+                "username=%s FOR UPDATE",
                 (username,),
             ).fetchone()
-            allowed = attempt["attempts"] <= 10
             matched = password_matches(
                 password, account["password_hash"] if account is not None else DUMMY_PASSWORD_HASH
             )
             valid = account is not None and account["enabled"] and matched
-            if not allowed or not valid:
+            if not valid:
                 pg.commit()
-                raise HTTPException(429 if not allowed else 401)
+                raise HTTPException(401)
             if not self._eligible(pg, account["agent_id"]):
                 pg.commit()
                 raise HTTPException(401)
@@ -74,9 +64,7 @@ class AgentAuth:
                 "INSERT INTO simulator.agent_sessions VALUES(%s,%s,%s)",
                 (token_digest(token), username, expiry),
             )
-            pg.execute(
-                "DELETE FROM simulator.agent_login_attempts WHERE subject_hash=%s", (subject,)
-            )
+            pg.execute("DELETE FROM simulator.login_attempts WHERE subject_hash=%s", (subject,))
         return {
             "access_token": token,
             "token_type": "bearer",
@@ -84,14 +72,15 @@ class AgentAuth:
             "mode": "agent_test_simulator",
         }
 
-    def session(self, token):
+    def session(self, token, *, connection=None, lock=False):
         if not isinstance(token, str) or not 1 <= len(token) <= 200:
             raise HTTPException(401)
-        with self.store.connect() as pg:
+        with nullcontext(connection) if connection is not None else self.store.connect() as pg:
             account = pg.execute(
                 "SELECT u.agent_id FROM simulator.agent_sessions s "
                 "JOIN simulator.agent_users u USING(username) "
-                "WHERE token_hash=%s AND expires_at>now() AND u.enabled",
+                "WHERE token_hash=%s AND expires_at>clock_timestamp() AND u.enabled"
+                + (" FOR SHARE OF s,u" if lock else ""),
                 (token_digest(token),),
             ).fetchone()
             if not account or not self._eligible(pg, account["agent_id"]):

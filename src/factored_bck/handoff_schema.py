@@ -48,4 +48,23 @@ CREATE TABLE IF NOT EXISTS simulator.handoffs (
 );
 CREATE INDEX IF NOT EXISTS handoffs_customer ON simulator.handoffs(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS handoffs_agent ON simulator.handoffs(assigned_agent_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS simulator.handoff_recoveries (
+    recovery_id text PRIMARY KEY,
+    handoff_id text NOT NULL REFERENCES simulator.handoffs(handoff_id),
+    recovered_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    prior_status text NOT NULL CHECK (prior_status IN ('assigned','accepted')),
+    prior_agent_id text NOT NULL,
+    prior_assigned_at timestamptz,
+    prior_accepted_at timestamptz,
+    prior_routing jsonb NOT NULL,
+    status text NOT NULL CHECK (status IN ('queued','assigned')),
+    assigned_agent_id text,
+    release_id text NOT NULL,
+    reason text NOT NULL CHECK (reason='assigned_agent_unavailable'),
+    authority jsonb NOT NULL,
+    CHECK ((status='queued' AND assigned_agent_id IS NULL)
+        OR (status='assigned' AND assigned_agent_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS recoveries_handoff
+    ON simulator.handoff_recoveries(handoff_id,recovered_at,recovery_id);
 """

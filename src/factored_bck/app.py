@@ -132,10 +132,11 @@ def create_app(settings: Settings | None = None, store=None, metrics=None) -> Fa
         return HealthResponse(status="ok", service=config.app_name, version=app_version)
 
     @app.get("/health/ready", response_model=HealthResponse, tags=["health"])
-    async def ready():
+    def ready():
         if data_store is not None:
             try:
                 data_store.ready()
+                app.state.handoffs.check_configuration()
             except Exception:
                 raise HTTPException(status_code=503) from None
         return HealthResponse(status="ready", service=config.app_name, version=app_version)

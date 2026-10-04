@@ -13,12 +13,17 @@ controlled tool dispatcher share this implementation. `AgentAuth` resolves a
 separate simulator identity; customer tokens do not authenticate agents and vice
 versa. All interfaces are synchronous; an async orchestrator must use a threadpool.
 
-`Store.initialize()` creates four additive tables under its existing advisory
+`Store.initialize()` creates additive tables under its existing advisory
 startup lock: `simulator.agent_users`, `agent_sessions`, `agent_login_attempts`,
-and `handoffs`. No ETL tables are changed. Credentials use existing salted scrypt,
+`handoffs`, and the recovery audit `handoff_recoveries`. No ETL tables are changed.
+Credentials use existing salted scrypt,
 sessions are opaque with SHA-256 hashes at rest and existing session TTL. Login
-throttling uses the same 10 attempts / 5 minutes / username-and-peer pattern in a
-separate table. Agent session use rechecks enabled account, accepted-release
+throttling shares the customer transport's persistent peer budget (30 attempts / five
+minutes) and database-wide nonblocking password-work lock. Switching transports or
+usernames cannot bypass these bounds. Customer and agent username budgets remain
+separate (10 failures / five minutes); success clears only that username budget.
+The old `agent_login_attempts` table is retained for additive migration compatibility
+and is no longer used for admission. Agent session use rechecks enabled account, accepted-release
 membership, Active snapshot status and Digital/Hybrid type. These are simulator
 credentials, not enterprise IAM or proof of real employment.
 
@@ -109,8 +114,14 @@ Lifecycle: creation → queued or assigned; administrative deterministic retry c
 move queued → assigned; assigned → accepted → resolved. Customer cancellation is
 allowed only queued/assigned → cancelled. Resolved/cancelled are terminal. A repeated
 transition to its current target is idempotent; other invalid transitions return
-409. Row locks serialize competing acceptance/cancellation. A resolution records
+409. Row locks serialize competing acceptance/cancellation/recovery. Mutations
+revalidate the session inside their write transaction, after any case/customer-lock
+wait. Session/account locks prevent logout or disablement from racing a committed
+transition. A resolution records
 an assigned simulator agent's acknowledgement, not proof of refund or safe resolution.
+Agent transitions also recheck the full current routing requirements for this case
+(including language, specialty and experience); loss of case suitability conflicts
+even when a generic agent session remains valid. Use local recovery to route safely.
 Wrong-owner reads/transitions return 404. Missing/expired/wrong-kind sessions return
 401; invalid input 422; idempotency conflicts 409; login limit 429; unexpected storage
 failure a sanitized 500 (or 503 for unavailable source contract). No failure returns
@@ -205,8 +216,10 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    ```
 
    This initializes simulator tables and verifies contract/column access. Existing
-   `/health/ready` still checks the base accepted-release contract, not every feature's
-   permissions; use this preflight before enabling the handoff user journey.
+   `/health/ready` also performs the handoff preflight and returns 503 when these
+   required source-column grants are missing. `/health/live` remains independent
+   of source configuration. Readiness does not prove accounts are provisioned or
+   staff are available: unstaffed cases can queue safely.
 5. Provision each consenting test agent with an accepted Active Digital/Hybrid ID
    and a separate password file (12–200 characters). No public signup by agent ID:
 
@@ -225,9 +238,32 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    uv run --locked python -m factored_bck.handoff_admin reroute --handoff-id <case-id>
    ```
 
-There is no live database configured in this checkout, so deployment grants,
-account provisioning and a real accepted-release end-to-end smoke test remain
-operator configuration. Docker Compose integration was not exercised locally.
+7. To recover an assigned/accepted case whose agent is disabled or fails current
+   accepted-release routing eligibility:
+
+   ```bash
+   uv run --locked python -m factored_bck.handoff_admin recover --handoff-id <case-id>
+   ```
+
+   This is a local administrative operation using trusted database credentials,
+   not a customer/agent/model capability or public HTTP route. No target agent or
+   authority label is accepted from the caller. It rejects eligible agents,
+   queued cases (use `reroute`), and resolved/cancelled cases. The existing router
+   chooses a replacement or queues the case; a replacement must explicitly accept
+   before resolving. Original context/evidence/source provenance remain immutable.
+   `simulator.handoff_recoveries` appends the previous agent/status/routing and
+   assignment/acceptance timestamps, replacement outcome, current accepted release,
+   server-derived database role/local effective UID, reason and recovery time in the
+   same transaction. Current-cycle acceptance resets; prior acceptance stays in the
+   audit. No code updates/deletes audit rows. Privileged database operators remain
+   trusted; this is not enterprise IAM or a tamper-proof external audit service.
+   CLI output includes only success/status or sanitized exception type.
+
+Fresh restricted-role startup, additive migration from the previous simulator,
+confirmation/recovery CLI, and backend-process/PostgreSQL restart are verified with
+private Unix sockets and controlled synthetic fixtures in `tests/test_backend_startup.py`.
+Production deployment grants/account provisioning and a full accepted ETL release
+smoke test remain operator configuration. Docker Compose integration was not exercised.
 See [actual aggregate source audit](service-agents-audit.md) for grounded data limits.
 
 ## Future LLM and frontend integration

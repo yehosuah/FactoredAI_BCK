@@ -86,6 +86,9 @@ def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_b
     assert store.ready()["release_id"] == "test-release"
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         handoffs.check_configuration()
+    with TestClient(create_app(store.settings, store=store)) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/health/ready").status_code == 503
     with admin.connect() as pg:
         pg.execute(Path("deploy/handoff-read-grants.sql").read_text())
     handoffs.check_configuration()

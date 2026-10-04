@@ -133,6 +133,11 @@ una entrega completa aceptada bajo el contrato `card-support-etl-v1` en `bank`.
 Readiness devuelve 503 hasta que haya una entrega disponible. La base HTTP sola
 conserva sus rutas de salud cuando `BCK_DATA_ENABLED=false`.
 
+Con datos habilitados, readiness también verifica los permisos por columnas del
+handoff. Aplica `deploy/handoff-read-grants.sql` como administrador después de
+crear las tablas ETL y ejecuta `python -m factored_bck.handoff_admin check` bajo
+el rol real del backend. No se concede lectura de contactos ni escritura en `bank`.
+
 `BCK_DEMO_PASSWORD_FILE` crea un usuario `demo` y tarjetas ficticias identificadas
 como `team_synthetic`; no activa acceso a clientes del organizador. Para crear una
 cuenta de prueba asociada a un cliente de la entrega aceptada:
@@ -263,6 +268,13 @@ Digital/Hybrid aprovisionados. Sesiones de cliente y agente son independientes.
 `POST/GET /me/handoffs` y las rutas `/agent/handoffs` comparten el módulo con las
 herramientas internas. `GET /me/handoff` conserva su contrato de historial.
 Asignado no significa disponible, aceptado ni resuelto.
+
+El login de agente comparte los límites peer y de concurrencia de verificación del
+cliente. Crear/cancelar/aceptar/resolver revalida la sesión dentro de su transacción.
+El administrador local puede recuperar casos assigned/accepted con agente no
+elegible mediante `python -m factored_bck.handoff_admin recover --handoff-id <id>`:
+reutiliza el router, conserva evidencia y registra la historia previa en una auditoría.
+No existe transporte público ni tool de recuperación; casos terminales no se reabren.
 
 Consulta [contrato, política, endpoints y despliegue](docs/human-handoffs.md) y
 [datos reales inspeccionados](docs/service-agents-audit.md). El despliegue requiere

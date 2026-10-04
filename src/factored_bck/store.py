@@ -194,23 +194,26 @@ class Store:
             (subject,),
         ).fetchone()["attempts"]
 
+    def _admit_login(self, pg, username, peer, *, namespace="user"):
+        """One password-work boundary shared by customer and agent transports."""
+        admitted = pg.execute(
+            "SELECT pg_try_advisory_xact_lock(%s) AS admitted", (LOGIN_KDF_LOCK,)
+        ).fetchone()["admitted"]
+        if not admitted:
+            raise HTTPException(429, headers={"Retry-After": "1"})
+        peer_attempts = self._login_attempt(pg, token_digest("login:peer:" + peer))
+        if peer_attempts > LOGIN_PEER_LIMIT:
+            pg.commit()
+            raise HTTPException(429)
+        subject = token_digest("login:" + namespace + ":" + username + "|" + peer)
+        if self._login_attempt(pg, subject) > 10:
+            pg.commit()
+            raise HTTPException(429)
+        return subject
+
     def login(self, username, password, peer):
-        subject = token_digest("login:user:" + username + "|" + peer)
         with self.connect() as pg:
-            # Cross-worker, nonblocking admission: at most one login KDF in this
-            # database. Rejections precede user lookup and treat all names equally.
-            admitted = pg.execute(
-                "SELECT pg_try_advisory_xact_lock(%s) AS admitted", (LOGIN_KDF_LOCK,)
-            ).fetchone()["admitted"]
-            if not admitted:
-                raise HTTPException(429, headers={"Retry-After": "1"})
-            peer_attempts = self._login_attempt(pg, token_digest("login:peer:" + peer))
-            if peer_attempts > LOGIN_PEER_LIMIT:
-                pg.commit()
-                raise HTTPException(429)
-            if self._login_attempt(pg, subject) > 10:
-                pg.commit()
-                raise HTTPException(429)
+            subject = self._admit_login(pg, username, peer)
             user = pg.execute(
                 "SELECT * FROM simulator.users WHERE username=%s FOR UPDATE", (username,)
             ).fetchone()

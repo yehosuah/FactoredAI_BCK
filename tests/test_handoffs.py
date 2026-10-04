@@ -328,7 +328,7 @@ def test_creation_rollback_and_unavailable_metrics_never_claim_transfer(backend,
     assert service.metrics()["total_handoffs"] == 0
     assert "private-database-error" not in response.text + caplog.text
     with store.connect() as pg:
-        pg.execute("DROP TABLE simulator.handoffs")
+        pg.execute("DROP TABLE simulator.handoffs CASCADE")
     response = client.get("/operations/metrics", headers=auth(customers[0]))
     assert response.json()["handoffs"] == {
         "status": "unavailable",
