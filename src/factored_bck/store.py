@@ -24,7 +24,6 @@ CARD_TYPES = ("Tarjeta Crédito", "Tarjeta Débito")
 SOURCE_CONTRACT_VERSION = "card-support-etl-v1"
 LOGIN_KDF_LOCK = 7236148203
 LOGIN_PEER_LIMIT = 30
-LOGIN_GLOBAL_LIMIT = 120
 STATE_MAP = {
     "Active": "ACTIVE",
     "Closed": "CLOSED",
@@ -192,7 +191,6 @@ class Store:
 
     def login(self, username, password, peer):
         subject = token_digest("login:user:" + username + "|" + peer)
-        global_subject = token_digest("login:global")
         with self.connect() as pg:
             # Cross-worker, nonblocking admission: at most one login KDF in this
             # database. Rejections precede user lookup and treat all names equally.
@@ -200,19 +198,11 @@ class Store:
                 "SELECT pg_try_advisory_xact_lock(%s) AS admitted", (LOGIN_KDF_LOCK,)
             ).fetchone()["admitted"]
             if not admitted:
-                raise HTTPException(429)
-            global_attempt = pg.execute(
-                "SELECT attempts FROM simulator.login_attempts WHERE subject_hash=%s "
-                "AND window_start>=now()-interval '5 minutes'",
-                (global_subject,),
-            ).fetchone()
-            if global_attempt and global_attempt["attempts"] >= LOGIN_GLOBAL_LIMIT:
-                raise HTTPException(429)
+                raise HTTPException(429, headers={"Retry-After": "1"})
             peer_attempts = self._login_attempt(pg, token_digest("login:peer:" + peer))
             if peer_attempts > LOGIN_PEER_LIMIT:
                 pg.commit()
                 raise HTTPException(429)
-            self._login_attempt(pg, global_subject)
             if self._login_attempt(pg, subject) > 10:
                 pg.commit()
                 raise HTTPException(429)

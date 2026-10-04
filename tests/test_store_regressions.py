@@ -167,27 +167,28 @@ def test_rotating_usernames_cannot_bypass_peer_budget(regression_store, monkeypa
     assert len(calls) == 30
     status(lambda: regression_store.login("missing", "wrong", "peer-b"), 401)
     assert len(calls) == 31
+    with regression_store.connect() as pg:
+        pg.execute("UPDATE simulator.login_attempts SET window_start=now()-interval '6 minutes'")
+    status(lambda: regression_store.login("missing-after-expiry", "wrong", "peer-a"), 401)
+    assert len(calls) == 32
 
 
-def test_rotating_peers_cannot_bypass_global_budget(regression_store, monkeypatch):
+def test_peer_bursts_do_not_lock_out_an_unrelated_account(regression_store, monkeypatch):
     from factored_bck import store as module
 
     calls = []
+    original = module.password_matches
     monkeypatch.setattr(module, "password_matches", lambda *args: calls.append(args) or False)
-    for index in range(125):
+    for index in range(120):
         status(
             lambda index=index: regression_store.login(
-                f"missing-{index}", "wrong", f"peer-{index}"
+                f"missing-{index}", "wrong", f"peer-{index // 30}"
             ),
-            401 if index < 120 else 429,
+            401,
         )
     assert len(calls) == 120
-    status(lambda: regression_store.login("demo", "wrong", "new-peer"), 429)
-    assert len(calls) == 120
-    with regression_store.connect() as pg:
-        pg.execute("UPDATE simulator.login_attempts SET window_start=now()-interval '6 minutes'")
-    status(lambda: regression_store.login("demo", "wrong", "new-peer"), 401)
-    assert len(calls) == 121
+    monkeypatch.setattr(module, "password_matches", original)
+    assert regression_store.login("demo", "old-team-password", "new-peer")["access_token"]
 
 
 def test_kdf_concurrency_is_bounded_across_store_instances(regression_store, monkeypatch):

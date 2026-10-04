@@ -152,9 +152,13 @@ contraseña conserva sus sesiones; la rotación no reinicia estados ni auditorí
 
 Antes de verificar contraseñas, el login admite como máximo una verificación
 simultánea por base PostgreSQL mediante un lock transaccional no bloqueante.
-Las ventanas persistentes de cinco minutos permiten 30 intentos por peer y 120
-globales, además del límite de 10 fallos por usuario/peer. Cambiar el nombre de
-usuario no evita estos límites; login exitoso no borra los presupuestos peer/global.
+Las ventanas persistentes de cinco minutos permiten 30 intentos por peer,
+además del límite de 10 fallos por usuario/peer. Cambiar el nombre de usuario no
+evita el límite peer; login exitoso no borra ese presupuesto. No hay un contador
+temporal compartido que permita a unos peers bloquear otros durante cinco minutos.
+El límite global es de concurrencia: scrypt solo ocupa un slot a la vez y el lock
+se libera automáticamente al finalizar la transacción; slot ocupado devuelve 429
+con `Retry-After: 1`. Rotar peers no permite ejecutar KDF simultáneos.
 Saturación devuelve 429 antes de consultar usuarios o ejecutar scrypt, tanto para
 cuentas existentes como inexistentes. El peer es la dirección que ve el servidor;
 tras un proxy compartido se comparte ese presupuesto. Son límites conservadores
