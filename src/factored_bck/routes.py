@@ -85,8 +85,9 @@ def movements(
     db: DB,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     before_date: date | None = None,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=2048)] = None,
 ):
-    return db.movements(principal, product_id, limit, before_date)
+    return db.movements(principal, product_id, limit, before_date, cursor)
 
 
 @router.post("/me/cards/{product_id}/actions", tags=["simulated actions"])

@@ -113,6 +113,17 @@ Las pruebas verifican salud, configuración y precedencia de variables, rechazo 
 inválida, errores 404/405/422/500, correlación por solicitud y control de documentación.
 Las rutas que fuerzan errores existen solo en pruebas, no en la aplicación ejecutable.
 
+Las regresiones de rotación y paginación usan PostgreSQL desechable con datos del
+equipo, socket Unix privado y TCP deshabilitado. Requieren `initdb` y `pg_ctl` en
+PATH; si faltan, pytest las omite. En macOS con PostgreSQL de Homebrew:
+
+```bash
+PATH="/opt/homebrew/opt/postgresql@18/bin:$PATH" PYTHONPATH=src make check
+```
+
+`PYTHONPATH=src` permite importar el checkout aunque macOS oculte el archivo editable
+`.pth` del entorno local. La suite no se conecta a una base existente.
+
 ## Integración de soporte de tarjetas
 
 La API de datos se habilita con `BCK_DATA_ENABLED=true`. Configura `BCK_DB_HOST`,
@@ -135,6 +146,24 @@ El archivo debe contener una contraseña de al menos 12 caracteres. Nunca uses u
 contraseña como argumento ni registres tokens. El aprovisionamiento es administrativo
 local; no hay registro público basado únicamente en un ID de cliente.
 
+Al reiniciar con una contraseña demo diferente (12–200 caracteres), se actualiza el
+hash y se revocan las sesiones demo en una sola transacción. Reiniciar con la misma
+contraseña conserva sus sesiones; la rotación no reinicia estados ni auditoría.
+
+Antes de verificar contraseñas, el login admite como máximo una verificación
+simultánea por base PostgreSQL mediante un lock transaccional no bloqueante.
+Las ventanas persistentes de cinco minutos permiten 30 intentos por peer,
+además del límite de 10 fallos por usuario/peer. Cambiar el nombre de usuario no
+evita el límite peer; login exitoso no borra ese presupuesto. No hay un contador
+temporal compartido que permita a unos peers bloquear otros durante cinco minutos.
+El límite global es de concurrencia: scrypt solo ocupa un slot a la vez y el lock
+se libera automáticamente al finalizar la transacción; slot ocupado devuelve 429
+con `Retry-After: 1`. Rotar peers no permite ejecutar KDF simultáneos.
+Saturación devuelve 429 antes de consultar usuarios o ejecutar scrypt, tanto para
+cuentas existentes como inexistentes. El peer es la dirección que ve el servidor;
+tras un proxy compartido se comparte ese presupuesto. Son límites conservadores
+del simulador, no una política de disponibilidad para producción.
+
 | Ruta | Comportamiento |
 | --- | --- |
 | `POST /auth/login`, `POST /auth/logout` | Sesión opaca, expirable y revocable de prueba |
@@ -152,6 +181,16 @@ solo registran solicitudes. No ejecuta pagos, reembolsos, adjudicación de fraud
 emisión ni envío. Los valores del organizador se presentan como históricos y los
 números de producto se enmascaran. El servicio conversacional sigue siendo consumidor
 de esta API; no se integra un modelo externo en esta implementación.
+
+Los movimientos devuelven `next_cursor` (null al terminar). Para continuar, envíalo
+como `cursor` conservando la misma tarjeta y sesión; el límite puede cambiar.
+El cursor recorre `process_date DESC, transaction_date DESC, transaction_id ASC`,
+incluyendo movimientos con la misma fecha y hora. `before_date` sigue siendo un
+filtro exclusivo opcional en la primera página; el cursor conserva ese filtro.
+Un cursor inválido o de otra tarjeta/cliente devuelve 422; cambiar el filtro devuelve
+422. Si el ETL cambia la entrega aceptada, continuar devuelve 409: empieza una nueva
+lectura para evitar mezclar versiones históricas. El cursor es continuación, no una
+credencial; cada consulta verifica la sesión y propiedad y usa parámetros SQL.
 
 Este checkout tiene su propio Dockerfile y Compose para la base HTTP. El Compose
 integrado se encuentra en la raíz del workspace ETL; construye este repositorio

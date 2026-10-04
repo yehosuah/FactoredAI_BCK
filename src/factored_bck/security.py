@@ -22,6 +22,11 @@ def password_matches(password, stored):
         return False
 
 
+# One valid hash per process, with the same work factor as provisioned credentials.
+# Its random password is discarded; matching it never authenticates an unknown user.
+DUMMY_PASSWORD_HASH = password_hash(secrets.token_urlsafe(32))
+
+
 def token_digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
