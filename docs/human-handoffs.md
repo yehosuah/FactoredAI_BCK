@@ -209,12 +209,26 @@ assignment and agent resolution must not be used as interchangeable outcome metr
    own `simulator` schema as in the existing setup. Back up persisted simulator data.
 2. A privileged database administrator runs [handoff-read-grants.sql](../deploy/handoff-read-grants.sql)
    after ETL tables exist. It grants only required columns through a dedicated
-   NOLOGIN role inherited by `backend_api`. The current ETL refresh revokes direct
+   NOLOGIN role inherited by the explicit deployment login. Set the session setting
+   `factored_bck.backend_role` to the exact configured `BCK_DB_USER` before running
+   the script; unset/empty/unknown/non-login targets and a LOGIN helper fail before
+   any grant. Role names are identifier-quoted, and all changes commit atomically.
+   The current ETL refresh revokes direct
    grants to `backend_api`; independent inherited grants survive. This was tested on
    disposable PostgreSQL 17.11. Do not grant names, email, phone, whole-table SELECT,
    writes or ownership. Validate that an existing reader role has no excess privileges.
    Current bootstrap uses INHERIT; custom NOINHERIT deployments need explicit role
    configuration. Reapply column grants if source tables are dropped/recreated.
+   For example, connect as the database administrator and use psql's safely quoted
+   variable substitution (the configured backend login must already exist):
+
+   ```sh
+   psql --set=ON_ERROR_STOP=1 --set=backend_role="$BCK_DB_USER" "$ADMIN_DATABASE_URL" <<'SQL'
+   SELECT set_config('factored_bck.backend_role', :'backend_role', false);
+   \i deploy/handoff-read-grants.sql
+   SQL
+   ```
+
 3. Configure the existing BCK database settings/secrets and `BCK_DATA_ENABLED=true`.
    Startup adds simulator tables. All workers must use the same fallback policy.
    Default `BCK_CRITICAL_SENIOR_FALLBACK_REASONS=[]` forbids Senior critical fallback.

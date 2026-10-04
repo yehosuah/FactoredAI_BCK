@@ -135,7 +135,10 @@ conserva sus rutas de salud cuando `BCK_DATA_ENABLED=false`.
 
 Con datos habilitados, readiness también verifica los permisos por columnas del
 handoff. Aplica `deploy/handoff-read-grants.sql` como administrador después de
-crear las tablas ETL y ejecuta `python -m factored_bck.handoff_admin check` bajo
+crear las tablas ETL, indicando el `BCK_DB_USER` real mediante la configuración
+de sesión `factored_bck.backend_role` ([ejemplo seguro](docs/human-handoffs.md#deployment)).
+El script rechaza un lector LOGIN y destinos ausentes o inválidos antes de conceder
+permisos. Luego ejecuta `python -m factored_bck.handoff_admin check` bajo
 el rol real del backend. No se concede lectura de contactos ni escritura en `bank`.
 
 `BCK_DEMO_PASSWORD_FILE` crea un usuario `demo` y tarjetas ficticias identificadas

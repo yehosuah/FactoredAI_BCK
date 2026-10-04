@@ -90,6 +90,7 @@ def test_restricted_role_journey_confirmations_handoff_cursor_and_refresh(tool_b
         assert client.get("/health/live").status_code == 200
         assert client.get("/health/ready").status_code == 503
     with admin.connect() as pg:
+        pg.execute("SELECT set_config('factored_bck.backend_role','backend_api',true)")
         pg.execute(Path("deploy/handoff-read-grants.sql").read_text())
     handoffs.check_configuration()
     handoffs.agents.provision("agent-login", "agent-1", "team-agent-password")

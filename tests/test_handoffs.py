@@ -389,6 +389,7 @@ def test_minimal_reader_grants_survive_etl_refresh_without_contact_access(backen
     sql = Path("deploy/handoff-read-grants.sql").read_text()
     with store.connect() as pg:
         pg.execute("CREATE ROLE backend_api LOGIN")
+        pg.execute("SELECT set_config('factored_bck.backend_role','backend_api',true)")
         pg.execute(sql)
         pg.execute("REVOKE ALL ON ALL TABLES IN SCHEMA bank FROM backend_api")
         pg.execute("ALTER DEFAULT PRIVILEGES IN SCHEMA bank REVOKE ALL ON TABLES FROM backend_api")

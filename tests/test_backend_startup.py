@@ -125,6 +125,7 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
     with server(settings, directory) as (client, env):
         assert client.get("/health/ready").status_code == 503
         with admin.connect() as pg:
+            pg.execute("SELECT set_config('factored_bck.backend_role','backend_api',true)")
             pg.execute(Path("deploy/handoff-read-grants.sql").read_text())
         assert client.get("/health/ready").status_code == 200
         handoffs.check_configuration()
