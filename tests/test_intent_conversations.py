@@ -206,7 +206,9 @@ def test_selection_is_captured_in_retries_and_null_keeps_legacy_fingerprint(clas
     assert len(adapter.contexts) == 2
 
 
-@pytest.mark.parametrize("kind", ["classifier", "classifier-lower-id", "tool", "handoff"])
+@pytest.mark.parametrize(
+    "kind", ["classifier", "classifier-lower-id", "matching-injected", "tool", "handoff"]
+)
 def test_conflicting_card_reference_is_clarified_even_for_injected_adapters(
     classifier_backend, kind
 ):
@@ -215,6 +217,11 @@ def test_conflicting_card_reference_is_clarified_even_for_injected_adapters(
     message = "Quiero pausar mi tarjeta por unos días DEMO-CARD-OTHER"
     if kind == "classifier-lower-id":
         message = "Quiero pausar mi tarjeta por unos días card2"
+    if kind == "matching-injected":
+        inject(
+            backend,
+            {"kind": "tool_request", "name": "pause_card", "arguments": {"product_id": "card1"}},
+        )
     if kind == "tool":
         inject(
             backend,
@@ -246,6 +253,37 @@ def test_conflicting_card_reference_is_clarified_even_for_injected_adapters(
         e["kind"] in ("confirmation_prepared", "handoff_created") for e in state["events"]
     )
     assert backend[0].action_metrics()["total_committed"] == 0
+    if kind == "matching-injected":
+        assert backend[2].app.state.conversations.adapter.contexts == []
+
+
+@pytest.mark.parametrize("kind", ["tool_request", "human_handoff"])
+def test_host_clarifies_a_proposed_target_conflict_without_an_explicit_message_id(
+    classifier_backend, kind
+):
+    backend = classifier_backend
+    if kind == "tool_request":
+        raw = {"kind": kind, "name": "pause_card", "arguments": {"product_id": "card2"}}
+    else:
+        raw = {
+            "kind": kind,
+            "triage": {
+                "reason": "card_support",
+                "severity": "low",
+                "required_specialty": None,
+                "minimum_experience": "Junior",
+                "language": "es",
+                "summary": "help",
+                "product_id": "card2",
+            },
+        }
+    adapter = inject(backend, raw)
+    state = submit(backend, create(backend), "Necesito ayuda", selected_product_id="card1")
+    assert event(state, "clarification")["data"]["verified"] is False
+    assert len(adapter.contexts) == 1
+    assert not any(
+        e["kind"] in ("confirmation_prepared", "handoff_created") for e in state["events"]
+    )
 
 
 @pytest.mark.parametrize(

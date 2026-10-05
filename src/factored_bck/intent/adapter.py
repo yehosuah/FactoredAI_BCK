@@ -6,6 +6,8 @@ checks ownership and eligibility, and asks the customer to confirm any mutation.
 
 import re
 
+from factored_bck.card_references import PRODUCT_ID
+from factored_bck.card_references import card_ids as _card_ids
 from factored_bck.conversation_contract import CARD_SELECTION_CONFLICT, MUTATING_TOOLS, AdapterInfo
 from factored_bck.intent.datasets import normalize
 from factored_bck.intent.model import IntentModel
@@ -17,7 +19,6 @@ CONFIDENCE_THRESHOLD = 0.6
 # Unclear turns tolerated before a human takes over.
 MAX_UNCLEAR_PROMPTS = 2
 # Card identifiers look like DEMO-CARD-001: uppercase segments joined by hyphens.
-PRODUCT_ID = re.compile(r"\b(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|card\d+[A-Za-z0-9_-]*)\b")
 
 CARD_TOOLS = {
     "block_lost_stolen": "block_card",
@@ -72,7 +73,6 @@ FIRST = {
     "o primeiro",
 }
 SECOND = {"2", "dos", "segunda", "la segunda", "el segundo", "segundo", "a segunda", "o segundo"}
-MAX_ID_LENGTH = 100
 DIRECTION_VERBS = {
     "pause_card": r"\b(?:pausar|pausarla|pausarlo|pausa|pause)\b",
     "reactivate_card": (
@@ -110,17 +110,6 @@ def _negated_action(text):
         for pattern in patterns
         for match in re.finditer(pattern, segment)
     )
-
-
-def _card_ids(text, known=()):
-    """Distinct card ids in order of appearance; overlong tokens are not ids."""
-    found = [
-        (m.start(), m.group()) for m in PRODUCT_ID.finditer(text) if len(m.group()) <= MAX_ID_LENGTH
-    ]
-    for product in known:
-        pattern = rf"(?<![\w-]){re.escape(product)}(?![\w-])"
-        found.extend((m.start(), product) for m in re.finditer(pattern, text))
-    return list(dict.fromkeys(product for _, product in sorted(found)))
 
 
 def _strip_ids(text, known=()):

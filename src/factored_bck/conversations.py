@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter, ValidationError
 
+from factored_bck.card_references import card_ids
 from factored_bck.conversation_contract import (
     CARD_SELECTION_CONFLICT,
     MUTATING_TOOLS,
@@ -281,6 +282,26 @@ class Conversations:
     def _propose(self, context, token):
         if self.adapter is None:
             return None, "adapter_unavailable"
+        if context.selected_product_id and context.messages:
+            known = tuple(
+                dict.fromkeys(
+                    (
+                        context.selected_product_id,
+                        *(
+                            product
+                            for message in context.messages
+                            if message.observation
+                            for product in message.observation.product_ids
+                            if product is not None
+                        ),
+                    )
+                )
+            )
+            explicit = card_ids(context.messages[-1].text, known)
+            if any(product != context.selected_product_id for product in explicit):
+                return Clarification(
+                    kind="clarification", question=CARD_SELECTION_CONFLICT[context.language]
+                ), None
 
         async def bounded():
             return await asyncio.wait_for(
