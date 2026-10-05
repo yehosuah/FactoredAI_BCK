@@ -315,7 +315,7 @@ Las tarjetas de `bank.products` derivan su procedencia del manifest del release.
 `team_generated_fixture`/`team_synthetic` producen `team_synthetic` en tarjeta,
 confirmación y recibo, con importes etiquetados `team_fixture`.
 `organizer_synthetic` y releases históricos sin ese campo conservan la semántica
-histórica. Un valor explícito desconocido falla cerrado con 503 antes de preparar
+histórica. Un valor explícito null o desconocido falla cerrado con 503 antes de preparar
 o ejecutar. No se infiere procedencia desde texto del cliente/adaptador.
 
 El aprovisionamiento de clientes aplica la misma procedencia del manifest y fija

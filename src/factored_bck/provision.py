@@ -27,7 +27,8 @@ def main(argv=None):
         with db.connect() as pg:
             release_id = db._current(pg, pin=True)
             customer = pg.execute(
-                "SELECT c.customer_id,r.manifest->>'source_kind' AS source_kind "
+                "SELECT c.customer_id,r.manifest->>'source_kind' AS source_kind,"
+                "r.manifest ? 'source_kind' AS source_kind_present "
                 "FROM bank.customers c JOIN bank.releases r USING(release_id) "
                 "WHERE c.customer_id=%s AND c.release_id=%s",
                 (args.customer_id, release_id),
@@ -40,7 +41,9 @@ def main(argv=None):
                     args.username,
                     password_hash(password),
                     args.customer_id,
-                    db.source_provenance(customer["source_kind"]),
+                    db.source_provenance(
+                        customer["source_kind"], declared=customer["source_kind_present"]
+                    ),
                 ),
             )
         print("Test account provisioned; credential values are not printed.")

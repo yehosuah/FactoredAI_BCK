@@ -14,6 +14,7 @@ from factored_bck.app import create_app
         ("team_synthetic", "team_synthetic"),
         ("organizer_synthetic", "organizer_synthetic"),
         (None, "organizer_synthetic"),
+        ("explicit_null", None),
         ("unsupported_source", None),
     ],
 )
@@ -27,7 +28,7 @@ def test_published_card_provenance_and_committed_evidence(tool_backend, manifest
         )
         manifest = {"contract_version": "card-support-etl-v1"}
         if manifest_kind is not None:
-            manifest["source_kind"] = manifest_kind
+            manifest["source_kind"] = None if manifest_kind == "explicit_null" else manifest_kind
         pg.execute("UPDATE bank.releases SET manifest=%s", (Jsonb(manifest),))
     headers = {"Authorization": "Bearer " + context.session_token.get_secret_value()}
     with TestClient(create_app(store.settings, store=store)) as client:
@@ -50,6 +51,7 @@ def test_published_card_provenance_and_committed_evidence(tool_backend, manifest
             return
         assert card.status_code == prepared.status_code == 200
         assert card.json()["card"]["source_kind"] == expected
+        assert "source_kind_present" not in card.json()["card"]
         assert card.json()["card"]["balance_semantics"] == (
             "team_fixture" if expected == "team_synthetic" else "historical_source_value"
         )
@@ -67,6 +69,7 @@ def test_published_card_provenance_and_committed_evidence(tool_backend, manifest
     [
         ("team_generated_fixture", "team_synthetic"),
         (None, "organizer_synthetic"),
+        ("explicit_null", None),
         ("unsupported_source", None),
     ],
 )
@@ -81,7 +84,7 @@ def test_provisioned_customer_uses_manifest_provenance(
         pg.execute("INSERT INTO bank.customers VALUES('test-release','new-customer')")
         manifest = {"contract_version": "card-support-etl-v1"}
         if kind is not None:
-            manifest["source_kind"] = kind
+            manifest["source_kind"] = None if kind == "explicit_null" else kind
         pg.execute("UPDATE bank.releases SET manifest=%s", (Jsonb(manifest),))
     password = "synthetic-customer-password"
     path = tmp_path / "private-password"

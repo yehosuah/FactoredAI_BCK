@@ -208,9 +208,9 @@ CORS, provider keys in the browser, frontend implementation or ETL publication i
 added in this backend integration. Full cross-service acceptance is coordinated
 separately against a synthetic ETL release and frontend build.
 
-Integrated validation: `make check` passed **445 tests, zero skips** on
+Integrated validation: `make check` passed **447 tests, zero skips** on
 Python3.13.14 and private disposable PostgreSQL18 (TCP disabled), with Ruff,
-formatting and lockfile checks clean. This includes54 conversation cases,8
+formatting and lockfile checks clean. This includes54 conversation cases,10
 provenance/provisioning cases and actual restricted API/PG process restart.
 No full frontend/ETL browser journey or real ML/provider is claimed by this count.
 
@@ -219,3 +219,10 @@ before_date and cursor. The outer argument bound now matches the dispatcher's
 four-field bound; individual strict schemas still reject unsupported keys and
 changed cursor filters. Two real timestamp/cursor regressions failed before the
 change and pass afterward; final445-test check includes them.
+
+A second external P2 review distinguished explicit JSON null from absent legacy
+provenance. Both source card reads and customer CLI check JSONB key presence;
+only absent keys use the legacy fallback. Null/unsupported explicit labels fail
+closed before command/account persistence, and internal presence metadata is not
+returned. Two reproduced failures now pass in the10-case provenance suite;
+final447-test check passed with zero skips (64.59s pytest).

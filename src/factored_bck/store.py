@@ -276,10 +276,11 @@ class Store:
             yield pg, self._current(pg)
 
     @staticmethod
-    def source_provenance(kind):
-        # Legacy accepted releases omit this field; new fixture releases declare it.
+    def source_provenance(kind, *, declared):
+        # Only an absent key identifies legacy provenance; explicit JSON null is invalid.
+        if declared is False:
+            return "organizer_synthetic"
         result = {
-            None: "organizer_synthetic",
             "organizer_synthetic": "organizer_synthetic",
             "team_generated_fixture": "team_synthetic",
             "team_synthetic": "team_synthetic",
@@ -298,14 +299,17 @@ class Store:
             card = pg.execute(
                 "SELECT p.product_id,p.customer_id,p.product_type,p.product_number,"
                 "p.currency,p.current_balance,p.credit_limit,p.product_status,p.last_updated,"
-                "r.manifest->>'source_kind' AS source_kind "
+                "r.manifest->>'source_kind' AS source_kind,"
+                "r.manifest ? 'source_kind' AS source_kind_present "
                 "FROM bank.products p JOIN bank.releases r USING(release_id) "
                 "WHERE p.release_id=%s AND p.customer_id=%s AND p.product_id=%s "
                 "AND p.product_type=ANY(%s)",
                 (release_id, customer_id, product_id, list(CARD_TYPES)),
             ).fetchone()
             if card:
-                card["source_kind"] = self.source_provenance(card["source_kind"])
+                card["source_kind"] = self.source_provenance(
+                    card["source_kind"], declared=card.pop("source_kind_present")
+                )
         if not card:
             raise HTTPException(404)
         state = pg.execute(
