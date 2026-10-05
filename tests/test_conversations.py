@@ -617,3 +617,50 @@ def test_semantically_invalid_date_and_handoff_language_rejected_before_dispatch
     state = submit(backend, create(backend, "es"))
     assert event(state, "error")["data"]["code"] == "invalid_adapter_output"
     assert called == []
+
+
+@pytest.mark.parametrize("before_date,valid", [("2026-01-03", True), ("2026-01-04", False)])
+def test_adapter_movement_cursor_accepts_four_fields_and_preserves_filter_checks(
+    conversation_backend, before_date, valid
+):
+    backend = conversation_backend
+    with backend[0].connect() as pg:
+        pg.execute(
+            "ALTER TABLE bank.transactions ALTER COLUMN transaction_date TYPE timestamp "
+            "USING transaction_date::timestamp"
+        )
+        pg.execute(
+            "INSERT INTO bank.transactions VALUES('test-release','c1','card1','tx2',"
+            "'2026-01-01','2026-01-02',20,'USD','purchase','posted','Fixture Merchant')"
+        )
+    first = (
+        backend[2]
+        .get(
+            "/me/cards/card1/movements",
+            params={"limit": 1, "before_date": "2026-01-03"},
+            headers=auth(backend[3][0]),
+        )
+        .json()
+    )
+    assert first["next_cursor"]
+    inject(
+        backend,
+        {
+            "kind": "tool_request",
+            "name": "get_movements",
+            "arguments": {
+                "product_id": "card1",
+                "limit": 1,
+                "before_date": before_date,
+                "cursor": first["next_cursor"],
+            },
+        },
+    )
+    state = submit(backend, create(backend))
+    if valid:
+        result = event(state, "tool_result")["data"]["result"]
+        assert [row["transaction_id"] for row in result["movements"]] == ["tx2"]
+    else:
+        error = event(state, "error")["data"]
+        assert error["code"] == "tool_failure" and error["tool_error"] == "invalid_arguments"
+    assert backend[0].action_metrics()["total_committed"] == 0

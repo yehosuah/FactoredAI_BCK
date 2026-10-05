@@ -97,7 +97,7 @@ PROPOSAL_ARGUMENTS = {
 class ToolRequest(Contract):
     kind: Literal["tool_request"]
     name: str = Field(min_length=1, max_length=64)
-    arguments: dict[str, JsonValue] = Field(max_length=3)
+    arguments: dict[str, JsonValue] = Field(max_length=4)
 
     @model_validator(mode="after")
     def allowed_arguments(self):

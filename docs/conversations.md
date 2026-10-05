@@ -208,8 +208,14 @@ CORS, provider keys in the browser, frontend implementation or ETL publication i
 added in this backend integration. Full cross-service acceptance is coordinated
 separately against a synthetic ETL release and frontend build.
 
-Integrated validation: `make check` passed **443 tests, zero skips** on
+Integrated validation: `make check` passed **445 tests, zero skips** on
 Python3.13.14 and private disposable PostgreSQL18 (TCP disabled), with Ruff,
-formatting and lockfile checks clean. This includes52 conversation cases,8
+formatting and lockfile checks clean. This includes54 conversation cases,8
 provenance/provisioning cases and actual restricted API/PG process restart.
 No full frontend/ETL browser journey or real ML/provider is claimed by this count.
+
+External P2 review: valid movement proposals may include product_id, limit,
+before_date and cursor. The outer argument bound now matches the dispatcher's
+four-field bound; individual strict schemas still reject unsupported keys and
+changed cursor filters. Two real timestamp/cursor regressions failed before the
+change and pass afterward; final445-test check includes them.
