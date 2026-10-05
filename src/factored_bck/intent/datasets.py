@@ -31,7 +31,12 @@ def normalize(text):
 def _case(row):
     # Team training rows use `text`/`labels`; the ETL draft pack uses request fields.
     text = row.get("text") or row.get("request_text")
-    labels = row.get("labels") or row.get("intent_labels") or [row.get("intent_label")]
+    labels = (
+        row.get("labels")
+        or row.get("intent_labels")
+        or row.get("candidate_intents")
+        or [row.get("intent_label")]
+    )
     family = row.get("family_id") or (row.get("leakage_group_ids") or [row["example_id"]])[0]
     case = Case(row["example_id"], row["language"], text, tuple(labels), family)
     if case.language not in ("es", "pt") or not case.text or not case.labels:

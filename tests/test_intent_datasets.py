@@ -1,3 +1,4 @@
+import json
 from collections import Counter
 
 from factored_bck.intent.datasets import TRAIN_PATH, load_cases, normalize, overlap
@@ -25,3 +26,23 @@ def test_overlap_reports_shared_texts_and_families():
     cases = load_cases(TRAIN_PATH)
     assert overlap(cases[:3], cases[2:5]) == {"texts": 1, "families": 1}
     assert overlap(cases[:2], cases[3:5]) == {"texts": 0, "families": 0}
+
+
+def test_etl_draft_candidate_intents_load_without_treating_review_as_approved(tmp_path):
+    path = tmp_path / "draft.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "example_id": "synthetic-case",
+                "language": "pt",
+                "request_text": "Perdi meu cartão e não reconheço uma cobrança",
+                "candidate_intents": ["block_lost_stolen", "register_unrecognized_charge"],
+                "leakage_group_ids": ["synthetic-family"],
+                "review_status": "draft",
+            }
+        )
+        + "\n"
+    )
+    (case,) = load_cases(path)
+    assert case.labels == ("block_lost_stolen", "register_unrecognized_charge")
+    assert case.family_id == "synthetic-family"

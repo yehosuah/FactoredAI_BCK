@@ -2,21 +2,17 @@
 
 ## Scope and dependency status
 
-This backend implements the P04 engineering interface from the October 3–5 agent
-sprint: authenticated persistent ES/PT conversations, bounded injected proposals,
-existing tools/confirmations/handoffs, and a clearly labeled deterministic stub.
-It does not implement a model, prompts, intent classification, retrieval, frontend,
-streaming, or new banking operations. No provider credentials are configured here.
+This backend provides authenticated persistent ES/PT conversations, bounded adapter
+proposals, tools/confirmations/handoffs, an explicit deterministic stub and a local
+trained intent classifier. The classifier loads committed JSON weights without
+external provider calls, credentials or runtime scikit-learn. It does not generate
+LLM prose or perform real banking operations. See [model evidence and limitations](ml-intent-router.md).
 
-The inspected base is `033dccbe4ef84f447f093755908a14a87e14bf11`. It contains
-server-owned confirmations, ToolDispatcher, and persistent handoffs with local
-recovery. It does **not** contain evidence of an accepted cross-repository P00
-conversation contract or P01's complete public nine-table ETL fixture boot. The
-contract below is executable in BCK and ready for consumer review, not evidence
-that FRT/ETL consumers have accepted it. Tests create private synthetic PostgreSQL
-fixtures directly; they do not claim the P01 Extract/Transform/Load acceptance.
-Integrated source card reads now derive fixture provenance from the ETL manifest. Full sprint acceptance remains blocked on those dependency gates and
-integrated verification; a passing stub suite is engineering evidence only.
+The main integration preserves audited local recovery, publisher pins, narrow source
+grants and independently authenticated customers/agents. The separately owned ETL
+and frontend have a persistent synthetic demo; enabling the accepted classifier
+requires a coordinated runtime rebuild that preserves its data. Backend tests use
+private synthetic PostgreSQL. They do not establish browser or production acceptance.
 
 ## HTTP contract: conversation-adapter-v1
 
@@ -31,7 +27,7 @@ lowercase hex. Responses carry `Cache-Control: no-store` and existing request ID
 | --- | --- | --- |
 | `POST /me/conversations` | `{"language":"es"}` or `pt`; required `Idempotency-Key` | Owned persistent conversation |
 | `GET /me/conversations/{id}` | Optional `after=0`, `limit=100` (1–100) | Reconnect, reconcile owned capability status, ordered event page |
-| `POST /me/conversations/{id}/turns` | `{"message":"...","language":"pt"}`; language optional; required `Idempotency-Key` | Persisted turn and its events, with `submitted_turn_id` |
+| `POST /me/conversations/{id}/turns` | `{"message":"...","language":"pt","selected_product_id":"<owned-card>"}`; language and selection optional; required `Idempotency-Key` | Persisted turn and its events, with `submitted_turn_id` |
 
 Keys are 1–100 characters from `[A-Za-z0-9_.:-]`. Message is nonblank, at most
 2,000 characters. Creation key scope is customer; turn key scope is conversation.
@@ -39,6 +35,20 @@ Identical retry returns the original identity and current state without invoking
 an adapter/tool again; changed input with the same key is 409. A turn retry retains
 the originally submitted payload, including omitted language. A later language
 change does not invalidate that retry or change any prepared/confirmed command.
+
+`selected_product_id` is an optional nullable customer-selected hint (1–100 characters).
+Before a new turn invokes the adapter, the backend checks that card under the locked
+authenticated customer and pins the current accepted release through the transaction.
+Foreign/missing IDs return 404 without creating a turn or invoking an adapter. The
+checked hint is supplied separately in `AdapterContext`; the user message is unchanged.
+It grants no execution or confirmation authority. A conflicting explicit reference or
+adapter proposal produces clarification, including for injected adapters.
+
+A non-null selection is part of the persistent fingerprint: changing/clearing it
+on the same key is 409. Missing/null preserves the prior fingerprint and allows
+pre-upgrade retries. Exact replays recover the owned existing turn without invoking
+the adapter again or requiring a historical card still to exist in a newer source.
+Frontend must capture message/language/selection/key once and retry that exact body.
 
 A conversation stores up to 100 turns. A new turn above that bound returns 409;
 reads and idempotent retries remain available. The state includes language,
@@ -53,10 +63,15 @@ version and mode, even if the host subsequently injects a different adapter.
 `create_app(..., adapter=adapter)` injects an implementation of `MLAdapter` with an
 `AdapterInfo` descriptor and `async propose(AdapterContext) -> dict`. The context
 contains contract version, ES/PT language, and at most the latest 20 user/assistant
-messages, with a truncation flag. It excludes session tokens, customer/account
-identity, database handles and executable capabilities. Text is untrusted. This
-minimal contract does not provide full transcript retention or tool-result context
-to a model; ordered tool results remain available in the customer conversation.
+messages, with a truncation flag, plus the separately owned-card-checked selection
+hint for this turn. User messages may also carry a `ToolObservation`
+from the actual persisted backend event for that turn: tool name, read/prepared/handoff/failed
+status and up to 20 listed product IDs. IDs outside the tool contract become null
+placeholders so list positions stay stable. No balances, contact data, receipts,
+account IDs or credentials are forwarded in those observations. They are historical
+context only; fresh dispatcher checks still determine authority. It excludes session tokens, customer/account
+identity, database handles and executable capabilities. Text is untrusted. Full tool results stay in the customer conversation; the adapter receives only
+the bounded observation, never arbitrary result payloads.
 
 Implementations must use nonblocking I/O, honor cancellation and set bounded
 provider deadlines. The host uses `asyncio.wait_for`, with
