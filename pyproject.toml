@@ -20,6 +20,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = ["httpx2>=2,<3", "pytest>=8,<10", "ruff>=0.12,<1"]
+ml = ["scikit-learn>=1.5,<2", "jupyterlab>=4,<5", "matplotlib>=3.9,<4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/factored_bck"]
