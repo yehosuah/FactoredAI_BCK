@@ -305,8 +305,9 @@ Los tools mutantes preparan confirmaciones vinculadas a la conversación. Reconn
 incorpora estados y evidencia verificada de confirmaciones y handoffs propios.
 
 El adaptador está deshabilitado por defecto. `BCK_CONVERSATION_ADAPTER=stub` habilita
-un stub determinista identificado como prueba; `BCK_ADAPTER_TIMEOUT_SECONDS` limita
-su espera (5 segundos por defecto). No incluye modelo real ni frontend. Consulta
+un stub determinista identificado como prueba y `BCK_CONVERSATION_ADAPTER=classifier` el
+clasificador de intenciones entrenado ([detalle y resultados](docs/ml-intent-router.md));
+`BCK_ADAPTER_TIMEOUT_SECONDS` limita su espera (5 segundos por defecto). No incluye frontend. Consulta
 [contrato, comandos de prueba y dependencias P00/P01](docs/conversations.md).
 
 ## Procedencia de fixtures publicados

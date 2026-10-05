@@ -18,6 +18,7 @@ from factored_bck.conversation_routes import router as conversation_router
 from factored_bck.conversations import Conversations
 from factored_bck.handoff_routes import router as handoff_router
 from factored_bck.handoff_store import HandoffStore
+from factored_bck.intent.adapter import ClassifierAdapter
 from factored_bck.metrics import HttpMetrics
 from factored_bck.ml_adapter import DeterministicStub
 from factored_bck.routes import router
@@ -78,6 +79,8 @@ def create_app(
     )
     if adapter is None and config.conversation_adapter == "stub":
         adapter = DeterministicStub()
+    if adapter is None and config.conversation_adapter == "classifier":
+        adapter = ClassifierAdapter()
     app.state.conversations = (
         Conversations(
             data_store, app.state.tools, app.state.confirmations, app.state.handoffs, adapter
