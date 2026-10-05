@@ -114,3 +114,9 @@ El futuro orquestador debe conservar claves e IDs, validar outputs estructurados
 mantener tokens fuera de prompts y separar eventos explícitos del cliente de texto
 del modelo. No darle acceso HTTP arbitrario ni registrar confirm como tool. La
 conversación/UI y el proveedor no están implementados; no se afirma P05 completo.
+
+P04's conversation host may supply a trusted `conversation_id` and shared database
+connection to `execute`; neither is an adapter/tool argument or catalogue field.
+This binds prepared confirmations and handoffs to the owned conversation and commits
+them with the turn. Standalone callers keep their existing transaction behavior.
+No confirm/cancel/recover tool is added. See [conversation contract](conversations.md).

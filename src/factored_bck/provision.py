@@ -20,21 +20,31 @@ def main(argv=None):
     os.umask(0o077)
     try:
         password = args.password_file.read_text().strip()
-        if len(password) < 12 or len(args.username) > 100:
+        if not 12 <= len(password) <= 200 or not 1 <= len(args.username) <= 100:
             raise ValueError("invalid_test_credentials")
         db = Store(Settings())
         db.initialize()
         with db.connect() as pg:
+            release_id = db._current(pg, pin=True)
             customer = pg.execute(
-                "SELECT customer_id FROM bank.customers WHERE customer_id=%s AND release_id="
-                "(SELECT release_id FROM bank.current_release WHERE singleton)",
-                (args.customer_id,),
+                "SELECT c.customer_id,r.manifest->>'source_kind' AS source_kind,"
+                "r.manifest ? 'source_kind' AS source_kind_present "
+                "FROM bank.customers c JOIN bank.releases r USING(release_id) "
+                "WHERE c.customer_id=%s AND c.release_id=%s",
+                (args.customer_id, release_id),
             ).fetchone()
             if not customer:
                 raise ValueError("customer_not_in_accepted_release")
             pg.execute(
                 "INSERT INTO simulator.users VALUES(%s,%s,%s,%s)",
-                (args.username, password_hash(password), args.customer_id, "organizer_synthetic"),
+                (
+                    args.username,
+                    password_hash(password),
+                    args.customer_id,
+                    db.source_provenance(
+                        customer["source_kind"], declared=customer["source_kind_present"]
+                    ),
+                ),
             )
         print("Test account provisioned; credential values are not printed.")
         return 0

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS simulator.handoffs (
     CHECK (status <> 'resolved' OR resolved_at IS NOT NULL),
     CHECK (status <> 'cancelled' OR cancelled_at IS NOT NULL)
 );
+ALTER TABLE simulator.handoffs ADD COLUMN IF NOT EXISTS conversation_id text;
 CREATE INDEX IF NOT EXISTS handoffs_customer ON simulator.handoffs(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS handoffs_agent ON simulator.handoffs(assigned_agent_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS simulator.handoff_recoveries (

@@ -1,5 +1,6 @@
 """Internal, provider-neutral tool interface over the authenticated Store contract."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
 from types import MappingProxyType
@@ -147,65 +148,21 @@ class ToolDispatcher:
             for name, tool in _TOOLS.items()
         ]
 
-    def execute(self, name: str, arguments: dict, *, context: ExecutionContext | None = None):
+    def execute(
+        self,
+        name: str,
+        arguments: dict,
+        *,
+        context: ExecutionContext | None = None,
+        conversation_id=None,
+        connection=None,
+    ):
+        """Conversation ID and connection are trusted host seams, never tool arguments."""
         if not isinstance(context, ExecutionContext):
             return _failure("unauthenticated")
         try:
-            # Context never supplies a principal: customer scope always comes from Store.session.
-            token = context.session_token.get_secret_value()
-            if not isinstance(token, str) or not 1 <= len(token) <= 200:
-                return _failure("unauthenticated")
-            principal = self._store.session(token)
-            if not isinstance(principal, dict) or not principal.get("customer_id"):
-                return _failure("unauthenticated")
-            if not isinstance(name, str) or len(name) > 64 or name not in _TOOLS:
-                return _failure("invalid_tool")
-            tool = _TOOLS[name]
-            if type(arguments) is not dict or len(arguments) > 4:
-                return _failure("invalid_arguments")
-            try:
-                inputs = tool.arguments.model_validate(arguments)
-            except ValidationError:
-                return _failure("invalid_arguments")
-            if tool.action is not None:
-                pending = self._confirmations.prepare(
-                    token,
-                    CardCommand(
-                        product_id=inputs.product_id,
-                        action=tool.action,
-                        transaction_id=inputs.transaction_id
-                        if isinstance(inputs, ChargeArguments)
-                        else None,
-                        process_date=inputs.process_date
-                        if isinstance(inputs, ChargeArguments)
-                        else None,
-                    ),
-                    inputs.idempotency_key,
-                )
-                return {"ok": True, "data": pending}
-            if name == "create_handoff":
-                data = self._handoffs.create(token, inputs)
-            elif name == "get_handoff":
-                data = self._handoffs.get(token, inputs.handoff_id)
-            elif name == "get_cards":
-                data = self._store.cards(principal)
-            elif name == "get_card":
-                data = self._store.card(principal, inputs.product_id)
-            elif name == "get_movements":
-                movement_args = (
-                    principal,
-                    inputs.product_id,
-                    inputs.limit,
-                    date.fromisoformat(inputs.before_date) if inputs.before_date else None,
-                )
-                data = (
-                    self._store.movements(*movement_args, cursor=inputs.cursor)
-                    if inputs.cursor is not None
-                    else self._store.movements(*movement_args)
-                )
-            else:
-                return _failure("invalid_tool")
-            return {"ok": True, "data": data}
+            with connection.transaction() if connection is not None else nullcontext():
+                return self._execute(name, arguments, context, conversation_id, connection)
         except HTTPException as exc:
             code = {
                 401: "unauthenticated",
@@ -220,3 +177,73 @@ class ToolDispatcher:
         except Exception:
             # Never log/re-raise exceptions containing arguments, tokens or database details.
             return _failure("backend_error")
+
+    def _execute(self, name, arguments, context, conversation_id, connection):
+        # Context never supplies a principal: customer scope always comes from Store.session.
+        token = context.session_token.get_secret_value()
+        if not isinstance(token, str) or not 1 <= len(token) <= 200:
+            return _failure("unauthenticated")
+        principal = self._store.session(token)
+        if not isinstance(principal, dict) or not principal.get("customer_id"):
+            return _failure("unauthenticated")
+        if not isinstance(name, str) or len(name) > 64 or name not in _TOOLS:
+            return _failure("invalid_tool")
+        tool = _TOOLS[name]
+        if type(arguments) is not dict or len(arguments) > 4:
+            return _failure("invalid_arguments")
+        try:
+            inputs = tool.arguments.model_validate(arguments)
+        except ValidationError:
+            return _failure("invalid_arguments")
+        if tool.action is not None:
+            pending = self._confirmations.prepare(
+                token,
+                CardCommand(
+                    product_id=inputs.product_id,
+                    action=tool.action,
+                    transaction_id=inputs.transaction_id
+                    if isinstance(inputs, ChargeArguments)
+                    else None,
+                    process_date=inputs.process_date
+                    if isinstance(inputs, ChargeArguments)
+                    else None,
+                ),
+                inputs.idempotency_key,
+                **(
+                    {"conversation_id": conversation_id, "connection": connection}
+                    if conversation_id is not None
+                    else {}
+                ),
+            )
+            return {"ok": True, "data": pending}
+        if name == "create_handoff":
+            data = self._handoffs.create(
+                token,
+                inputs,
+                **(
+                    {"conversation_id": conversation_id, "connection": connection}
+                    if conversation_id is not None
+                    else {}
+                ),
+            )
+        elif name == "get_handoff":
+            data = self._handoffs.get(token, inputs.handoff_id)
+        elif name == "get_cards":
+            data = self._store.cards(principal)
+        elif name == "get_card":
+            data = self._store.card(principal, inputs.product_id)
+        elif name == "get_movements":
+            movement_args = (
+                principal,
+                inputs.product_id,
+                inputs.limit,
+                date.fromisoformat(inputs.before_date) if inputs.before_date else None,
+            )
+            data = (
+                self._store.movements(*movement_args, cursor=inputs.cursor)
+                if inputs.cursor is not None
+                else self._store.movements(*movement_args)
+            )
+        else:
+            return _failure("invalid_tool")
+        return {"ok": True, "data": data}
