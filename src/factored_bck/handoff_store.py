@@ -1,6 +1,7 @@
 """Authenticated persistent handoffs; one transaction commits routing and safe evidence."""
 
 import os
+from contextlib import nullcontext
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -51,13 +52,16 @@ class HandoffStore:
         )
         return {**result, "release_id": release_id}
 
-    def _evidence(self, pg, release_id, customer_id, product_id):
+    def _evidence(self, pg, release_id, customer_id, product_id, *, conversation_id=None):
         card = self.store._card(pg, release_id, customer_id, product_id) if product_id else None
         rows = pg.execute(
             "SELECT result,created_at FROM simulator.actions WHERE customer_id=%s "
             "AND (%s::text IS NULL OR result->>'product_id'=%s) "
+            "AND (%s::text IS NULL OR EXISTS (SELECT 1 FROM simulator.action_confirmations c "
+            "WHERE c.action_id=simulator.actions.action_id AND c.conversation_id=%s "
+            "AND c.customer_id=simulator.actions.customer_id AND c.status='executed')) "
             "ORDER BY created_at DESC,action_id DESC LIMIT 21",
-            (customer_id, product_id, product_id),
+            (customer_id, product_id, product_id, conversation_id, conversation_id),
         ).fetchall()
         evidence = []
         for row in rows[:20]:
@@ -106,6 +110,7 @@ class HandoffStore:
                         "routing",
                     )
                 },
+                **({"conversation_id": row["conversation_id"]} if row["conversation_id"] else {}),
                 "triage": {
                     k: row["request_payload"][k]
                     for k in (
@@ -127,7 +132,9 @@ class HandoffStore:
             }
         )
 
-    def create(self, token, arguments: CreateHandoffArguments):
+    def create(
+        self, token, arguments: CreateHandoffArguments, *, conversation_id=None, connection=None
+    ):
         user = self.store.session(token)
         arguments = CreateHandoffArguments.model_validate(arguments)
         # Authentication is transport context, never content or an idempotency key.
@@ -135,7 +142,7 @@ class HandoffStore:
             raise HTTPException(422)
         triage = arguments.triage
         payload = triage.model_dump(mode="json")
-        with self.store.connect() as pg:
+        with nullcontext(connection) if connection is not None else self.store.connect() as pg:
             pg.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s,7236148203))",
                 (user["customer_id"],),
@@ -149,18 +156,27 @@ class HandoffStore:
                 (user["customer_id"], arguments.idempotency_key),
             ).fetchone()
             if previous:
-                if previous["request_payload"] != payload:
+                if (
+                    previous["request_payload"] != payload
+                    or previous["conversation_id"] != conversation_id
+                ):
                     raise HTTPException(409)
                 return self._resource(previous)
             release_id = self.store._current(pg, pin=True)
-            evidence = self._evidence(pg, release_id, user["customer_id"], triage.product_id)
+            evidence = self._evidence(
+                pg,
+                release_id,
+                user["customer_id"],
+                triage.product_id,
+                conversation_id=conversation_id,
+            )
             routing = self._routing(pg, release_id, user["customer_id"], triage)
             assigned = routing["assigned_agent_id"] is not None
             row = pg.execute(
                 "INSERT INTO simulator.handoffs(handoff_id,customer_id,created_by,idempotency_key,"
                 "request_payload,release_id,reason,severity,required_level,assigned_agent_id,status,"
-                "routing,model_context,verified_evidence,assigned_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() END) "
+                "routing,model_context,verified_evidence,assigned_at,conversation_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() END,%s) "
                 "RETURNING *",
                 (
                     uuid4().hex,
@@ -185,6 +201,7 @@ class HandoffStore:
                     ),
                     Jsonb(evidence),
                     assigned,
+                    conversation_id,
                 ),
             ).fetchone()
             result = self._resource(row)

@@ -12,6 +12,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from factored_bck.confirmation_schema import SCHEMA as CONFIRMATION_SCHEMA
+from factored_bck.conversation_schema import SCHEMA as CONVERSATION_SCHEMA
 from factored_bck.handoff_schema import SCHEMA as HANDOFF_SCHEMA
 from factored_bck.pagination import MovementCursor
 from factored_bck.security import (
@@ -171,6 +172,7 @@ class Store:
 
             pg.execute(HANDOFF_SCHEMA)
             pg.execute(CONFIRMATION_SCHEMA)
+            pg.execute(CONVERSATION_SCHEMA)
 
     def ready(self):
         with self.connect() as pg:
@@ -273,6 +275,19 @@ class Store:
             pg.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             yield pg, self._current(pg)
 
+    @staticmethod
+    def source_provenance(kind):
+        # Legacy accepted releases omit this field; new fixture releases declare it.
+        result = {
+            None: "organizer_synthetic",
+            "organizer_synthetic": "organizer_synthetic",
+            "team_generated_fixture": "team_synthetic",
+            "team_synthetic": "team_synthetic",
+        }.get(kind)
+        if result is None:
+            raise HTTPException(503)
+        return result
+
     def _card(self, pg, release_id, customer_id, product_id):
         card = pg.execute(
             "SELECT *,NULL::timestamp AS last_updated FROM simulator.fixture_cards "
@@ -281,13 +296,16 @@ class Store:
         ).fetchone()
         if not card:
             card = pg.execute(
-                "SELECT product_id,customer_id,product_type,product_number,"
-                "currency,current_balance,"
-                "credit_limit,product_status,last_updated,'organizer_synthetic' AS source_kind "
-                "FROM bank.products WHERE release_id=%s AND customer_id=%s AND product_id=%s "
-                "AND product_type=ANY(%s)",
+                "SELECT p.product_id,p.customer_id,p.product_type,p.product_number,"
+                "p.currency,p.current_balance,p.credit_limit,p.product_status,p.last_updated,"
+                "r.manifest->>'source_kind' AS source_kind "
+                "FROM bank.products p JOIN bank.releases r USING(release_id) "
+                "WHERE p.release_id=%s AND p.customer_id=%s AND p.product_id=%s "
+                "AND p.product_type=ANY(%s)",
                 (release_id, customer_id, product_id, list(CARD_TYPES)),
             ).fetchone()
+            if card:
+                card["source_kind"] = self.source_provenance(card["source_kind"])
         if not card:
             raise HTTPException(404)
         state = pg.execute(

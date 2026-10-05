@@ -24,6 +24,7 @@ def server(settings, directory):
         BCK_DB_HOST=settings.db_host,
         BCK_DB_USER=settings.db_user,
         BCK_DB_NAME=settings.db_name,
+        BCK_CONVERSATION_ADAPTER=settings.conversation_adapter,
         PYTHONPATH=str(Path("src").resolve()),
     )
     with (Path(directory) / "api.log").open("a") as log:
@@ -86,6 +87,9 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
             )
         # Reproduce main's pre-feature simulator while retaining its fixture users/cards.
         for table in (
+            "conversation_events",
+            "conversation_turns",
+            "conversations",
             "action_confirmations",
             "handoff_recoveries",
             "handoffs",
@@ -119,7 +123,9 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
             "bank.transactions TO backend_api"
         )
         pg.execute("GRANT SELECT(release_id,customer_id) ON bank.customers TO backend_api")
-    settings = admin.settings.model_copy(update={"db_user": "backend_api"})
+    settings = admin.settings.model_copy(
+        update={"db_user": "backend_api", "conversation_adapter": "stub"}
+    )
     store = Store(settings)
     handoffs = HandoffStore(store)
     with server(settings, directory) as (client, env):
@@ -142,28 +148,67 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
         )
         assert agent_login.status_code == 200
         agent_headers = {"Authorization": "Bearer " + agent_login.json()["access_token"]}
-        item = client.post(
-            "/me/cards/card-1/actions",
-            headers=headers | {"Idempotency-Key": "process-pause"},
-            json={"action": "pause"},
+        conversation = client.post(
+            "/me/conversations",
+            headers=headers | {"Idempotency-Key": "process-conversation"},
+            json={"language": "es"},
         ).json()
+        assert conversation["adapter"]["mode"] == "stub"
+        conversation_path = "/me/conversations/" + conversation["conversation_id"]
+        pause = client.post(
+            conversation_path + "/turns",
+            headers=headers | {"Idempotency-Key": "process-pause"},
+            json={"message": "/pause card-1"},
+        ).json()
+        assert (
+            client.post(
+                conversation_path + "/turns",
+                headers=headers | {"Idempotency-Key": "process-pause"},
+                json={"message": "/pause card-1"},
+            ).json()
+            == pause
+        )
+        item = next(e for e in pause["events"] if e["kind"] == "confirmation_prepared")["data"][
+            "result"
+        ]
+        assert store.action_metrics()["total_committed"] == 0
+        customer2 = client.post(
+            "/auth/login", json={"username": "user-2", "password": "test-password"}
+        ).json()
+        other_headers = {"Authorization": "Bearer " + customer2["access_token"]}
+        assert client.get(conversation_path, headers=other_headers).status_code == 404
+        assert client.get(conversation_path, headers=agent_headers).status_code == 401
+        portuguese = client.post(
+            "/me/conversations",
+            headers=other_headers | {"Idempotency-Key": "process-pt"},
+            json={"language": "pt"},
+        ).json()
+        portuguese_path = "/me/conversations/" + portuguese["conversation_id"]
+        clarification = client.post(
+            portuguese_path + "/turns",
+            headers=other_headers | {"Idempotency-Key": "process-clarify"},
+            json={"message": "/clarify"},
+        ).json()
+        assert (
+            next(e for e in clarification["events"] if e["kind"] == "clarification")["data"]["text"]
+            == "Pausa temporária ou perda/roubo?"
+        )
         assert item["status"] == "pending"
         path = "/me/action-confirmations/" + item["confirmation_id"] + "/confirm"
         receipt = client.post(path, headers=headers).json()
         assert receipt["verified"] and receipt["evidence"]["simulator_state"] == "PAUSED"
-        case = client.post(
-            "/me/handoffs",
+        case_turn = client.post(
+            conversation_path + "/turns",
             headers=headers | {"Idempotency-Key": "process-case"},
-            json={
-                "reason": "card_support",
-                "severity": "low",
-                "required_specialty": None,
-                "minimum_experience": "Junior",
-                "language": "es",
-                "summary": "Synthetic process restart",
-                "product_id": "card-1",
-            },
+            json={"message": "/handoff"},
         ).json()
+        case = next(e for e in case_turn["events"] if e["kind"] == "handoff_created")["data"][
+            "result"
+        ]
+        assert case["conversation_id"] == conversation["conversation_id"]
+        assert [r["receipt"]["action_id"] for r in case["verified_evidence"]["actions"]] == [
+            receipt["evidence"]["action_id"]
+        ]
         case_path = "/agent/handoffs/" + case["handoff_id"]
         assert case["assigned_agent_id"] == "agent-1"
         assert (
@@ -217,6 +262,26 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
         )
         assert client.post(path, headers=headers).json() == receipt
         assert store.action_metrics()["total_committed"] == 1
+        history = client.get(conversation_path, headers=headers).json()
+        assert history["conversation_id"] == conversation["conversation_id"]
+        assert (
+            next(e for e in history["events"] if e["kind"] == "confirmation_status")["data"][
+                "result"
+            ]
+            == receipt
+        )
+        assert (
+            client.post(
+                conversation_path + "/turns",
+                headers=headers | {"Idempotency-Key": "process-pause"},
+                json={"message": "/pause card-1"},
+            ).json()["submitted_turn_id"]
+            == pause["submitted_turn_id"]
+        )
+        assert client.get(portuguese_path, headers=other_headers).json() == clarification | {
+            "submitted_turn_id": None
+        }
+        assert client.get(conversation_path, headers=other_headers).status_code == 404
         recovered = client.get("/me/handoffs/" + case["handoff_id"], headers=headers).json()
         assert recovered["status"] == "assigned" and recovered["assigned_agent_id"] == "agent-2"
         with store.connect() as pg:
@@ -234,3 +299,13 @@ def test_restricted_fresh_start_migrates_preserves_recovery_and_restarts(tool_ba
         assert (
             client.post(case_path + "/resolve", headers=new_headers).json()["status"] == "resolved"
         )
+        resolved = client.get(conversation_path, headers=headers).json()
+        assert (
+            next(e for e in reversed(resolved["events"]) if e["kind"] == "handoff_status")["data"][
+                "result"
+            ]["status"]
+            == "resolved"
+        )
+        assert store.action_metrics()["total_committed"] == 1
+        assert client.post("/auth/logout", headers=headers).status_code == 200
+        assert client.get(conversation_path, headers=headers).status_code == 401

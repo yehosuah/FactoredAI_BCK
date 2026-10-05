@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     db_password_file: Path | None = None
     demo_password_file: Path | None = None
     metrics_token_file: Path | None = None
+    conversation_adapter: Literal["disabled", "stub"] = "disabled"
+    adapter_timeout_seconds: float = Field(default=5, ge=0.01, le=30)
     confirmation_seconds: int = Field(default=300, ge=30, le=900)
     session_seconds: int = Field(default=3600, ge=60, le=86400)
     critical_senior_fallback_reasons: list[Reason] = Field(default_factory=list, max_length=7)

@@ -21,3 +21,6 @@
 | Agente elegible | Cuenta de simulador aprovisionada cuyo snapshot cumple estado, tipo, idioma, especialidad y experiencia; no prueba disponibilidad en vivo. |
 | Confirmación de acción | Comando exacto persistido del cliente autenticado, con estado/version y vencimiento; solo una confirmación explícita por ID puede autorizar su ejecución. |
 | Revisión de tarjeta | Contador persistido que cambia con transiciones simuladas y detecta cambios que vuelven al mismo estado. |
+| Conversación persistente | Contexto ES/PT propiedad de un cliente autenticado, con ID del backend y eventos ordenados que sobreviven a reconexión. |
+| Turno | Mensaje autenticado y su propuesta validada, resultado o fallo persistidos con una clave de reintento por conversación. |
+| Propuesta del adaptador | Salida no confiable de una interfaz ML inyectada; nunca concede identidad, autorización, confirmación ni evidencia de éxito. |

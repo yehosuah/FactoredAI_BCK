@@ -200,9 +200,8 @@ original evidence. If commit outcome is unknown, retry the same key and payload.
 Administrative `reroute` works only on queued cases, applies current accepted
 source/policy and cannot receive a chosen agent ID. It updates routing metadata
 and assignment atomically; original creation release and evidence remain unchanged.
-`routing.release_id` identifies the retry's source. There is no automatic rerouting
-of accepted/assigned work if an agent later becomes inactive; operator workflow for
-reassignment and human review remains a limitation, not an unsafe automatic fallback.
+`routing.release_id` identifies the retry's source. Unavailable assigned/accepted
+agents require the explicit local recovery operation described below.
 
 `GET /operations/metrics` adds `handoffs`, available only through the separate
 host-controlled operator credential (`BCK_METRICS_TOKEN_FILE`). Customer/agent
@@ -339,3 +338,12 @@ Disposable PostgreSQL tests exercise both transports, real session isolation,
 scoped evidence, idempotent concurrency, lifecycle races, commit-time rollback,
 metrics/privacy and inherited least-privilege grants after ETL-style revocation.
 No test requires organizer records or the ETL checkout.
+
+## Conversation-scoped creation
+
+P04 adds trusted host-only conversation ID/transaction seams. Cases created through
+conversations persist that ID; their action evidence includes only executed
+confirmations from that conversation. Standalone cases retain customer-scoped
+evidence. Ordered conversation events preserve originating turn and later case
+status/recovery observations. Routing and the accepted separate recovery audit are
+unchanged. See [conversation contract](conversations.md).

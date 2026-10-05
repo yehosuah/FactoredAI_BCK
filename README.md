@@ -192,8 +192,9 @@ siguen siendo simuladas. Ver [contrato de confirmación](docs/action-confirmatio
 
 No ejecuta pagos, reembolsos, adjudicación de fraude, emisión ni envío. Los valores
 del organizador son históricos y los números de producto están enmascarados.
-No hay proveedor LLM ni conversación/UI implementada: es el primitivo backend,
-no P05 completo.
+Las conversaciones persistentes y el adaptador inyectable se describen abajo.
+El modo stub es explícito; proveedor ML real e interfaz navegador se integran
+por sus propietarios. Esta entrega no certifica P05 completo.
 
 Los movimientos devuelven `next_cursor` (null al terminar). Para continuar, envíalo
 como `cursor` conservando la misma tarjeta y sesión; el límite puede cambiar.
@@ -293,3 +294,30 @@ no sustituye ese preflight. Senior para critical está deshabilitado por defecto
 `BCK_CONFIRMATION_SECONDS` controla el TTL de confirmación (300 por defecto,
 30–900 segundos). El despliegue debe retirar workers antiguos para evitar rutas
 de ejecución inmediata. La migración de simulator es aditiva al arrancar.
+
+## Conversaciones persistentes (P04)
+
+`POST /me/conversations`, `GET /me/conversations/{id}` y
+`POST /me/conversations/{id}/turns` conservan conversaciones autenticadas ES/PT y
+sus eventos ordenados. Creación y turnos requieren `Idempotency-Key`. El adaptador
+ML se inyecta en `create_app`; sus propuestas se validan y nunca confirman acciones.
+Los tools mutantes preparan confirmaciones vinculadas a la conversación. Reconnect
+incorpora estados y evidencia verificada de confirmaciones y handoffs propios.
+
+El adaptador está deshabilitado por defecto. `BCK_CONVERSATION_ADAPTER=stub` habilita
+un stub determinista identificado como prueba; `BCK_ADAPTER_TIMEOUT_SECONDS` limita
+su espera (5 segundos por defecto). No incluye modelo real ni frontend. Consulta
+[contrato, comandos de prueba y dependencias P00/P01](docs/conversations.md).
+
+## Procedencia de fixtures publicados
+
+Las tarjetas de `bank.products` derivan su procedencia del manifest del release.
+`team_generated_fixture`/`team_synthetic` producen `team_synthetic` en tarjeta,
+confirmación y recibo, con importes etiquetados `team_fixture`.
+`organizer_synthetic` y releases históricos sin ese campo conservan la semántica
+histórica. Un valor explícito desconocido falla cerrado con 503 antes de preparar
+o ejecutar. No se infiere procedencia desde texto del cliente/adaptador.
+
+El aprovisionamiento de clientes aplica la misma procedencia del manifest y fija
+el release aceptado hasta el commit. Las contraseñas de prueba tienen 12–200
+caracteres y se leen de un archivo privado; no se imprimen.
