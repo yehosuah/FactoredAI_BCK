@@ -7,6 +7,7 @@ checks ownership and eligibility, and asks the customer to confirm any mutation.
 import re
 
 from factored_bck.conversation_contract import AdapterInfo
+from factored_bck.intent.datasets import normalize
 from factored_bck.intent.model import IntentModel
 from factored_bck.intent.taxonomy import NAMES, PRIORITY, UNCLEAR
 
@@ -58,24 +59,68 @@ UNCLEAR_SUMMARY = {
 }
 
 
+FIRST = {
+    "1",
+    "uno",
+    "una",
+    "primera",
+    "la primera",
+    "el primero",
+    "primero",
+    "a primeira",
+    "primeira",
+    "o primeiro",
+}
+SECOND = {"2", "dos", "segunda", "la segunda", "el segundo", "segundo", "a segunda", "o segundo"}
+MAX_ID_LENGTH = 100
+
+
+def _card_ids(text):
+    """Distinct card ids in order of appearance; overlong tokens are not ids."""
+    found = [m for m in PRODUCT_ID.findall(text) if len(m) <= MAX_ID_LENGTH]
+    return list(dict.fromkeys(found))
+
+
+def _strip_ids(text):
+    # Ids such as TEAM-CARD-PAUSED would otherwise read as words like "pausar".
+    return PRODUCT_ID.sub(" ", text)
+
+
 def _rank(model, text):
-    probabilities = model.predict_proba(text)
+    probabilities = model.predict_proba(_strip_ids(text))
     return sorted(probabilities, key=probabilities.get, reverse=True), probabilities
 
 
-def _recent_clarifications(context):
-    """Clarifying questions we asked since the last reply that was not one."""
-    prefix = CHOICE[context.language].split("{")[0]
-    count = 0
-    for message in reversed(context.messages):
-        if message.role != "assistant":
-            continue
-        if message.text != UNCLEAR_PROMPTS[context.language] and not message.text.startswith(
-            prefix
-        ):
-            break
-        count += 1
-    return count
+def _handled(model, text):
+    """Intent of a user message the policy would have acted on alone, else None."""
+    ranked, probabilities = _rank(model, text)
+    if ranked[0] != UNCLEAR and probabilities[ranked[0]] >= CONFIDENCE_THRESHOLD:
+        return ranked[0]
+    return None
+
+
+def _is_clarification(text):
+    prompts = UNCLEAR_PROMPTS.values()
+    prefixes = [choice.split("{")[0] for choice in CHOICE.values()]
+    return text in prompts or any(text.startswith(prefix) for prefix in prefixes)
+
+
+def _choice_options(question):
+    """Intents named in one of our choice questions, in the order they were offered."""
+    for names in NAMES.values():
+        found = [(question.find(name), label) for label, name in names.items() if name in question]
+        if len(found) >= 2:
+            return [label for _, label in sorted(found)]
+    return []
+
+
+def _ordinal(text):
+    clean = normalize(text).strip(" .!")
+    if clean in FIRST:
+        return 0
+    if clean in SECOND:
+        return 1
+    return None
 
 
 def _clip(text, limit=300):
@@ -97,23 +142,63 @@ def _handoff(language, reason, severity, specialty, experience, summary, questio
     return {"kind": "human_handoff", "triage": triage}
 
 
+def _choose_product(users):
+    """One unambiguous card id: from the last message, else from earlier ones."""
+    for scope in (users[-1:], users[:-1]):
+        ids = _card_ids(" ".join(scope))
+        if ids:
+            return ids[0] if len(ids) == 1 else None
+    return None
+
+
 def route(model, context):
     language = context.language
-    users = [m.text for m in context.messages if m.role == "user"]
+    messages = list(context.messages)
+    if not any(m.role == "user" for m in messages):
+        return {"kind": "clarification", "question": UNCLEAR_PROMPTS[language]}
+    users = [m.text for m in messages if m.role == "user"]
     last = users[-1]
-    products = PRODUCT_ID.findall(" ".join(users))
-    product = products[-1] if products else None
+    product = _choose_product(users)
+
+    # The adapter never sees tool results, so it infers them: an earlier user message the
+    # policy acted on with confidence was served, and only later turns are still pending.
+    previous = messages[:-1]
+    served_at, served_intent = -1, None
+    for index in range(len(previous) - 1, -1, -1):
+        if previous[index].role == "user":
+            served_intent = _handled(model, previous[index].text)
+            if served_intent:
+                served_at = index
+                break
+    pending = previous[served_at + 1 :]
+    clarifications = sum(m.role == "assistant" and _is_clarification(m.text) for m in pending)
 
     ranked, probabilities = _rank(model, last)
-    if probabilities[ranked[0]] < CONFIDENCE_THRESHOLD and len(users) > 1:
-        # A short follow-up such as a card id inherits the earlier request.
-        joined_ranked, joined = _rank(model, " ".join(users[-3:]))
-        if joined[joined_ranked[0]] > probabilities[ranked[0]]:
-            ranked, probabilities = joined_ranked, joined
     intent, confidence = ranked[0], probabilities[ranked[0]]
+    if confidence < CONFIDENCE_THRESHOLD:
+        options = []
+        if previous and previous[-1].role == "assistant":
+            options = _choice_options(previous[-1].text)
+        choice = _ordinal(last)
+        if options and choice is not None:
+            # The customer picked one of the two options we offered.
+            intent, confidence = options[choice], 1.0
+        elif (
+            _card_ids(last)
+            and served_intent in CARD_TOOLS
+            and not _card_ids(previous[served_at].text)
+        ):
+            # A card id completes the served request that had to list cards first.
+            intent, confidence = served_intent, 1.0
+        elif clarifications:
+            texts = [m.text for m in pending if m.role == "user"] + [last]
+            joined_ranked, joined = _rank(model, " ".join(texts))
+            if joined[joined_ranked[0]] > confidence:
+                ranked, probabilities = joined_ranked, joined
+                intent, confidence = ranked[0], probabilities[ranked[0]]
 
     if intent == UNCLEAR or confidence < CONFIDENCE_THRESHOLD:
-        if _recent_clarifications(context) >= MAX_UNCLEAR_PROMPTS:
+        if clarifications >= MAX_UNCLEAR_PROMPTS:
             summary = UNCLEAR_SUMMARY[language].format(_clip(last))
             return _handoff(language, "card_support", "low", None, "Junior", summary, [], product)
         if intent == UNCLEAR:

@@ -26,8 +26,18 @@ mensaje del cliente
 | Acción o consulta de tarjeta con identificador en el mensaje | `tool_request` de esa herramienta |
 | Acción o consulta sin identificador | `get_cards`, para que el cliente vea sus tarjetas |
 
-Si el último mensaje no basta (por ejemplo, solo `DEMO-CARD-001`), el adaptador vuelve a
-clasificar los últimos tres mensajes del cliente juntos, para completar el pedido anterior.
+El adaptador no ve resultados de herramientas, así que infiere el estado: un mensaje
+anterior que clasificó con confianza se considera atendido, y solo los turnos posteriores
+quedan pendientes. Con esa regla:
+
+- Un identificador de tarjeta solo (por ejemplo `DEMO-CARD-001`) completa el pedido atendido
+  que tuvo que listar tarjetas primero.
+- Una respuesta ordinal ("la primera", "2", "a segunda") elige una opción de la pregunta.
+- Tras una aclaración, los mensajes pendientes se clasifican juntos.
+- Un "ok" después de un pedido atendido no lo repite.
+- Solo cuentan para el escalamiento las aclaraciones posteriores al último pedido atendido.
+- Los identificadores se quitan del texto antes de clasificar, se ignoran si superan 100
+  caracteres, y si hay más de uno en el mensaje se listan las tarjetas en vez de elegir.
 
 El modelo nunca decide autorización, elegibilidad ni el éxito de una acción: eso lo hace
 el backend. Las respuestas son plantillas fijas en español y portugués; no hay un LLM
