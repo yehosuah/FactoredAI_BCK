@@ -74,17 +74,22 @@ Detalle, gráficos y errores en
 1. **Evidencia optimista.** Los datos de entrenamiento, las palabras clave de la línea base
    y la validación cruzada tienen el mismo autor. La prueba independiente de 72 casos está
    pendiente de ejecutar.
-2. **Sin doble etiquetado.** No hay medida de acuerdo entre anotadores.
-3. **Confunde la dirección de la acción.** Pausar, reactivar y activar comparten raíces;
+2. **Sesgo de selección.** `C` y el umbral 0.6 se eligieron sobre las mismas predicciones
+   fuera de partición que se reportan, lo que también infla un poco los números.
+3. **Agrupación sin efecto.** Cada caso de entrenamiento es su propia familia, así que la
+   agrupación por familia no protege contra paráfrasis cercanas; solo el control de texto
+   duplicado lo hace.
+4. **Sin doble etiquetado.** No hay medida de acuerdo entre anotadores.
+5. **Confunde la dirección de la acción.** Pausar, reactivar y activar comparten raíces;
    los n-gramas no ven la negación ("desactiva... la vuelvo a activar").
-4. **Pedidos poco claros:** recall 0.46. El umbral compensa enviando la mitad de los
+6. **Pedidos poco claros:** recall 0.46. El umbral compensa enviando la mitad de los
    mensajes a aclaración, lo que alarga algunas conversaciones.
-5. **Hueco del contrato.** El contexto del adaptador solo trae mensajes de usuario y
+7. **Hueco del contrato.** El contexto del adaptador solo trae mensajes de usuario y
    asistente, no resultados de herramientas. El adaptador no puede saber el
    `product_id` de una tarjeta listada por `get_cards`; el identificador tiene que llegar
    en el texto del cliente (por ejemplo, insertado por el frontend al elegir una tarjeta).
    Los identificadores se reconocen con el patrón `DEMO-CARD-001`.
-6. **Datos sintéticos.** Ningún número describe clientes reales.
+8. **Datos sintéticos.** Ningún número describe clientes reales.
 
 ## Reproducir
 
