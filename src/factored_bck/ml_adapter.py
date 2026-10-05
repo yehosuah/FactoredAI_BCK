@@ -1,4 +1,4 @@
-"""Injected ML seam and explicit deterministic engineering stub; no real model."""
+"""Injected ML seam and explicit deterministic engineering stub."""
 
 from typing import Protocol
 

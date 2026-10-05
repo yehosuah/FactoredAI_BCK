@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from factored_bck.intent.datasets import TRAIN_PATH, load_cases
@@ -33,3 +35,20 @@ def test_export_matches_scikit_learn_on_every_training_text(tmp_path):
     for case, row in zip(cases, expected, strict=True):
         got = model.predict_proba(case.text)
         assert max(abs(got[label] - row[classes.index(label)]) for label in LABELS) < 1e-6
+
+
+@pytest.mark.parametrize("corruption", ["labels", "nan", "infinity", "dimension", "indices"])
+def test_malformed_local_weights_fail_before_model_serving(corruption):
+    payload = json.loads(MODEL_PATH.read_text())
+    if corruption == "labels":
+        payload["labels"][0] = "confirm_card"
+    elif corruption == "nan":
+        payload["coef"][0][0] = float("nan")
+    elif corruption == "infinity":
+        payload["intercept"][0] = float("inf")
+    elif corruption == "dimension":
+        payload["idf"].pop()
+    else:
+        payload["vocabulary"][next(iter(payload["vocabulary"]))] = -1
+    with pytest.raises(ValueError, match="invalid_intent_model"):
+        IntentModel(payload)

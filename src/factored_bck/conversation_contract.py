@@ -14,13 +14,17 @@ from pydantic import (
 )
 
 from factored_bck.handoff import Triage
-from factored_bck.tools import CardArguments, DateString, MovementArguments, NoArguments
+from factored_bck.tools import CardArguments, DateString, MovementArguments, NoArguments, ProductId
 
 CONTRACT_VERSION = "conversation-adapter-v1"
 Language = Literal["es", "pt"]
 Identifier = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
 Key = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.:-]+$")]
 Text = Annotated[str, Field(min_length=1, max_length=2000, pattern=r"\S")]
+CARD_SELECTION_CONFLICT = {
+    "es": "La tarjeta mencionada y la seleccionada no coinciden. ¿Cuál deseas usar?",
+    "pt": "O cartão mencionado e o selecionado são diferentes. Qual você deseja usar?",
+}
 
 
 class Contract(BaseModel):
@@ -34,6 +38,7 @@ class CreateConversation(Contract):
 class SubmitTurn(Contract):
     message: Text
     language: Language | None = None
+    selected_product_id: ProductId | None = None
 
 
 class AdapterInfo(Contract):
@@ -42,9 +47,29 @@ class AdapterInfo(Contract):
     mode: Literal["stub", "injected", "disabled"]
 
 
+class ToolObservation(Contract):
+    """Minimal persisted backend outcome; historical context, never authorization."""
+
+    tool: Literal[
+        "get_cards",
+        "get_card",
+        "get_movements",
+        "block_card",
+        "pause_card",
+        "reactivate_card",
+        "activate_card",
+        "request_replacement",
+        "register_unrecognized_charge",
+        "create_handoff",
+    ]
+    status: Literal["read", "prepared", "handoff", "failed"]
+    product_ids: tuple[ProductId | None, ...] = Field(default=(), max_length=20)
+
+
 class ContextMessage(Contract):
     role: Literal["user", "assistant"]
     text: Text
+    observation: ToolObservation | None = None
 
 
 class AdapterContext(Contract):
@@ -52,6 +77,7 @@ class AdapterContext(Contract):
     language: Language
     messages: tuple[ContextMessage, ...]
     history_truncated: bool
+    selected_product_id: ProductId | None = None
 
 
 class Answer(Contract):

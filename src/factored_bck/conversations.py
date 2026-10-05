@@ -10,8 +10,10 @@ from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter, ValidationError
 
 from factored_bck.conversation_contract import (
+    CARD_SELECTION_CONFLICT,
     MUTATING_TOOLS,
     PROPOSAL,
+    PROPOSAL_ARGUMENTS,
     AdapterContext,
     AdapterInfo,
     Answer,
@@ -23,6 +25,8 @@ from factored_bck.conversation_contract import (
     Identifier,
     Key,
     SubmitTurn,
+    ToolObservation,
+    ToolRequest,
 )
 from factored_bck.store import encode
 from factored_bck.tools import ExecutionContext
@@ -216,20 +220,59 @@ class Conversations:
             result = self._resource(pg, user, conversation_id, after=after, limit=limit)
         return result
 
-    def _context(self, pg, conversation_id, language):
+    def _context(self, pg, conversation_id, language, *, selected_product_id=None):
         rows = pg.execute(
-            "SELECT kind,data FROM simulator.conversation_events WHERE conversation_id=%s "
+            "SELECT kind,data,turn_id FROM simulator.conversation_events WHERE conversation_id=%s "
             "AND kind IN ('user_message','answer','clarification') "
             "ORDER BY sequence DESC LIMIT 21",
             (conversation_id,),
         ).fetchall()
+        turns = [row["turn_id"] for row in rows[:20] if row["kind"] == "user_message"]
+        outcomes = pg.execute(
+            "SELECT DISTINCT ON (turn_id) turn_id,kind,data "
+            "FROM simulator.conversation_events WHERE conversation_id=%s AND turn_id=ANY(%s) "
+            "AND trust='backend' AND kind IN "
+            "('tool_result','confirmation_prepared','handoff_created','error') "
+            "ORDER BY turn_id,sequence DESC",
+            (conversation_id, turns),
+        ).fetchall()
+        observations = {}
+        for outcome in outcomes:
+            data = outcome["data"]
+            tool = data.get("tool")
+            if tool not in PROPOSAL_ARGUMENTS and tool != "create_handoff":
+                continue
+            status = {
+                "tool_result": "read",
+                "confirmation_prepared": "prepared",
+                "handoff_created": "handoff",
+                "error": "failed",
+            }[outcome["kind"]]
+            ids = ()
+            if status == "read" and tool == "get_cards":
+                # Preserve positions: dropping an unusable ID shifts ordinal selections.
+                ids = tuple(
+                    value
+                    if isinstance(value, str) and 1 <= len(value) <= 100 and value.strip()
+                    else None
+                    for value in (card["product_id"] for card in data["result"]["cards"][:20])
+                )
+            elif status in ("read", "prepared") and tool != "get_cards":
+                ids = (data["arguments"]["product_id"],)
+            observations[outcome["turn_id"]] = ToolObservation(
+                tool=tool, status=status, product_ids=ids
+            )
         return AdapterContext(
             language=language,
+            selected_product_id=selected_product_id,
             history_truncated=len(rows) > 20,
             messages=tuple(
                 ContextMessage(
                     role="user" if row["kind"] == "user_message" else "assistant",
                     text=row["data"]["text"],
+                    observation=observations.get(row["turn_id"])
+                    if row["kind"] == "user_message"
+                    else None,
                 )
                 for row in reversed(rows[:20])
             ),
@@ -259,6 +302,17 @@ class Conversations:
             proposal = PROPOSAL.validate_python(raw, strict=True)
             if isinstance(proposal, HumanHandoff) and proposal.triage.language != context.language:
                 raise ValueError("handoff_language_mismatch")
+            product = (
+                proposal.arguments.get("product_id")
+                if isinstance(proposal, ToolRequest)
+                else proposal.triage.product_id
+                if isinstance(proposal, HumanHandoff)
+                else None
+            )
+            if context.selected_product_id and product and product != context.selected_product_id:
+                return Clarification(
+                    kind="clarification", question=CARD_SELECTION_CONFLICT[context.language]
+                ), None
             return proposal, None
         except (ValidationError, ValueError, TypeError, RecursionError):
             return None, "invalid_adapter_output"
@@ -330,6 +384,10 @@ class Conversations:
         key = TypeAdapter(Key).validate_python(key, strict=True)
         if token in body.model_dump_json() or token in key:
             raise HTTPException(422)
+        # Missing/null has the old meaning and fingerprint, preserving existing retries.
+        payload = body.model_dump(exclude={"selected_product_id"})
+        if body.selected_product_id is not None:
+            payload["selected_product_id"] = body.selected_product_id
         with self._transaction(token) as (pg, user):
             conversation = self._owned(pg, user, conversation_id)
             previous = pg.execute(
@@ -338,10 +396,13 @@ class Conversations:
                 (conversation_id, key),
             ).fetchone()
             if previous:
-                if previous["payload"] != body.model_dump():
+                if previous["payload"] != payload:
                     raise HTTPException(409)
                 turn_id = previous["turn_id"]
             else:
+                if body.selected_product_id is not None:
+                    release_id = self.store._current(pg, pin=True)
+                    self.store._card(pg, release_id, user["customer_id"], body.selected_product_id)
                 count = pg.execute(
                     "SELECT count(*) AS n FROM simulator.conversation_turns "
                     "WHERE conversation_id=%s",
@@ -359,7 +420,7 @@ class Conversations:
                         turn_id,
                         conversation_id,
                         key,
-                        Jsonb(body.model_dump()),
+                        Jsonb(payload),
                         language,
                         Jsonb(self.info.model_dump()),
                     ),
@@ -376,7 +437,12 @@ class Conversations:
                     {"text": body.message, "language": language},
                     trust="untrusted",
                 )
-                proposal, error = self._propose(self._context(pg, conversation_id, language), token)
+                proposal, error = self._propose(
+                    self._context(
+                        pg, conversation_id, language, selected_product_id=body.selected_product_id
+                    ),
+                    token,
+                )
                 self.store.session(token, connection=pg)  # Recheck expiry after provider delay.
                 if error:
                     self._event(

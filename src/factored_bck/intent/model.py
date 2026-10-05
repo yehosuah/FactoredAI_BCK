@@ -2,10 +2,11 @@
 
 import json
 from collections import Counter
-from math import exp, log, sqrt
+from math import exp, isfinite, log, sqrt
 from pathlib import Path
 
 from factored_bck.intent.datasets import normalize
+from factored_bck.intent.taxonomy import LABELS
 
 MODEL_PATH = Path(__file__).with_name("intent_model_v1.json")
 NGRAM_RANGE = (2, 4)
@@ -31,6 +32,7 @@ class IntentModel:
     """Sublinear TF-IDF with L2 norm, then multinomial logistic regression."""
 
     def __init__(self, payload):
+        self._validate(payload)
         self.version = payload["model_version"]
         self.labels = tuple(payload["labels"])
         self.vocabulary = payload["vocabulary"]
@@ -39,6 +41,50 @@ class IntentModel:
         self.intercept = payload["intercept"]
         self.probes = payload.get("probes", [])
         self.metadata = payload.get("metadata", {})
+
+    @staticmethod
+    def _validate(payload):
+        """Reject malformed local artifacts at startup, before proposing any tools."""
+        if not isinstance(payload, dict):
+            raise ValueError("invalid_intent_model")
+        vocabulary = payload.get("vocabulary")
+        if not isinstance(vocabulary, dict) or not 1 <= len(vocabulary) <= 100_000:
+            raise ValueError("invalid_intent_model")
+        size = len(vocabulary)
+        if (
+            payload.get("labels") != list(LABELS)
+            or not isinstance(payload.get("model_version"), str)
+            or not 1 <= len(payload["model_version"]) <= 100
+            or any(
+                not isinstance(gram, str) or not 2 <= len(gram) <= 4 or type(index) is not int
+                for gram, index in vocabulary.items()
+            )
+            or set(vocabulary.values()) != set(range(size))
+        ):
+            raise ValueError("invalid_intent_model")
+
+        def vector(value, length, positive=False):
+            return (
+                isinstance(value, list)
+                and len(value) == length
+                and all(
+                    type(number) in (int, float)
+                    and abs(number) <= 1_000_000
+                    and isfinite(number)
+                    and (not positive or number > 0)
+                    for number in value
+                )
+            )
+
+        coefficients = payload.get("coef")
+        if (
+            not vector(payload.get("idf"), size, positive=True)
+            or not vector(payload.get("intercept"), len(LABELS))
+            or not isinstance(coefficients, list)
+            or len(coefficients) != len(LABELS)
+            or any(not vector(row, size) for row in coefficients)
+        ):
+            raise ValueError("invalid_intent_model")
 
     @classmethod
     def load(cls, path=MODEL_PATH):

@@ -23,21 +23,35 @@ mensaje del cliente
 | Pedido poco claro o fuera de alcance | Aclaración con lo que el asistente puede hacer |
 | Dos aclaraciones seguidas sin resolver | `human_handoff`, motivo `card_support`, severidad baja |
 | Cargo no reconocido | `human_handoff`, motivo `fraud`, especialidad `Fraudes`, severidad alta |
-| Acción o consulta de tarjeta con identificador en el mensaje | `tool_request` de esa herramienta |
+| Acción o consulta con tarjeta seleccionada validada o identificador en el mensaje | `tool_request` de esa herramienta |
 | Acción o consulta sin identificador | `get_cards`, para que el cliente vea sus tarjetas |
 
-El adaptador no ve resultados de herramientas, así que infiere el estado: un mensaje
-anterior que clasificó con confianza se considera atendido, y solo los turnos posteriores
-quedan pendientes. Con esa regla:
+El contexto interno incluye observaciones mínimas de resultados backend persistidos:
+herramienta, estado de lectura/preparación/handoff/fallo y hasta 20 identificadores de
+las tarjetas listadas. No recibe saldos, contactos, recibos completos, cuentas,
+credenciales ni conexiones. Las observaciones son contexto histórico, no autorización.
 
-- Un identificador de tarjeta solo (por ejemplo `DEMO-CARD-001`) completa el pedido atendido
-  que tuvo que listar tarjetas primero.
-- Una respuesta ordinal ("la primera", "2", "a segunda") elige una opción de la pregunta.
-- Tras una aclaración, los mensajes pendientes se clasifican juntos.
-- Un "ok" después de un pedido atendido no lo repite.
-- Solo cuentan para el escalamiento las aclaraciones posteriores al último pedido atendido.
-- Los identificadores se quitan del texto antes de clasificar, se ignoran si superan 100
-  caracteres, y si hay más de uno en el mensaje se listan las tarjetas en vez de elegir.
+- `selected_product_id` permite usar la tarjeta elegida en la interfaz sin modificar
+  el texto del cliente; el backend valida propiedad y fija el release. Referencias
+  contradictorias piden aclaración y no eligen otro objetivo silenciosamente.
+- Un identificador real de una tarjeta listada, incluso sin el patrón DEMO-CARD-001,
+  completa el pedido que obtuvo ese listado.
+- Una respuesta ordinal ("la primera", "2", "a segunda") elige una opción de la
+  aclaración o una tarjeta del listado real; las posiciones se conservan aun si
+  un identificador no cabe en el contrato de herramientas.
+- Los mensajes pendientes se agregan solo después del último resultado backend.
+  Un mensaje clasificado con confianza no prueba que la herramienta haya funcionado.
+- Un "ok" después de preparar un comando no lo confirma ni lo repite.
+- Un fallo no se transforma en éxito supuesto. Reintentos usan las claves persistidas.
+- Los identificadores conocidos se quitan del texto antes de clasificar; una selección
+  ambigua vuelve al listado en vez de elegir una tarjeta arbitraria.
+
+La política conserva prioridad de pérdida/robo cuando el cliente lo informa explícitamente,
+incluso si también menciona un cargo no reconocido. Un pedido de bloqueo sin motivo
+pregunta si se trata de pérdida/robo o pausa temporal. Los pedidos de aumentar el
+límite van a soporte humano: el simulador solo permite consultar ese valor.
+Son guardas de capacidad/riesgo derivadas del contrato, no reentrenamiento con el
+corpus borrador. Las reglas lexicales son conservadoras y no cubren toda ambigüedad.
 
 El modelo nunca decide autorización, elegibilidad ni el éxito de una acción: eso lo hace
 el backend. Las respuestas son plantillas fijas en español y portugués; no hay un LLM
@@ -51,7 +65,8 @@ generando texto.
 - **No se usan las transcripciones del organizador:** 171,321 filas con solo 42 textos de
   cliente distintos, según el perfil del ETL. Entrenar ahí mediría plantillas, no clientes.
 - **Prueba independiente:** los 72 casos borrador del paquete del ETL, escritos por otro
-  autor. Quedan fuera de git; el notebook los lee desde `INTENT_HELDOUT_PATH`.
+  autor. Quedan fuera de git; el notebook los lee desde `INTENT_HELDOUT_PATH`. El loader
+  admite `candidate_intents` del contrato ETL. Sus anotaciones permanecen borrador.
 
 ## Resultados (validación cruzada de 5 particiones, agrupada por familia)
 
@@ -72,24 +87,52 @@ Detalle, gráficos y errores en
 ## Limitaciones
 
 1. **Evidencia optimista.** Los datos de entrenamiento, las palabras clave de la línea base
-   y la validación cruzada tienen el mismo autor. La prueba independiente de 72 casos está
-   pendiente de ejecutar.
+   y la validación cruzada tienen el mismo autor. El diagnóstico de 72 casos se ejecutó, pero sus anotaciones, idioma y rutas
+   aún no están revisados; no es un benchmark independiente aceptado.
 2. **Sesgo de selección.** `C` y el umbral 0.6 se eligieron sobre las mismas predicciones
    fuera de partición que se reportan, lo que también infla un poco los números.
 3. **Agrupación sin efecto.** Cada caso de entrenamiento es su propia familia, así que la
    agrupación por familia no protege contra paráfrasis cercanas; solo el control de texto
    duplicado lo hace.
 4. **Sin doble etiquetado.** No hay medida de acuerdo entre anotadores.
-5. **Confunde la dirección de la acción.** Pausar, reactivar y activar comparten raíces;
-   los n-gramas no ven la negación ("desactiva... la vuelvo a activar").
+5. **Confunde la dirección de la acción.** Pausar, reactivar y activar comparten raíces.
+   Se reprodujeron errores de reactivación ante pedidos cortos de pausa en ambos
+   idiomas. La política ahora pide aclaración si verbos explícitos contradicen la
+   dirección predicha o hay negación ante una intención mutante. Es una guarda
+   conservadora, no un parser semántico completo. No modifica pesos ni métricas.
 6. **Pedidos poco claros:** recall 0.46. El umbral compensa enviando la mitad de los
    mensajes a aclaración, lo que alarga algunas conversaciones.
-7. **Hueco del contrato.** El contexto del adaptador solo trae mensajes de usuario y
-   asistente, no resultados de herramientas. El adaptador no puede saber el
-   `product_id` de una tarjeta listada por `get_cards`; el identificador tiene que llegar
-   en el texto del cliente (por ejemplo, insertado por el frontend al elegir una tarjeta).
-   Los identificadores se reconocen con el patrón `DEMO-CARD-001`.
+7. **Contexto limitado.** Observaciones backend acotadas permiten seleccionar una
+   tarjeta realmente listada sin inferir éxito. Solo se incluyen los últimos 20
+   mensajes y hasta 20 IDs por listado; no se revela el resultado financiero completo.
+   La autorización y vigencia del release se revalidan al invocar la herramienta.
 8. **Datos sintéticos.** Ningún número describe clientes reales.
+
+## Diagnóstico del paquete ETL borrador (5 de octubre)
+
+El manifest identifica `draft_review_only`; las 72 anotaciones son `draft`. Se verificó
+SHA-256 `4fb6cbcbb9153bafcaf9dd701824c3e2ff1cdc05d920e1790e6f3cd6255f2289` y el conteo.
+No hay textos normalizados ni familias declaradas compartidas con entrenamiento.
+No se reentrenó ni ajustó el umbral con estos casos. La medida usa la primera intención
+candidata (pérdida/robo primero); no certifica rutas de múltiples intenciones.
+
+| Medida borrador | Clasificador | Palabras clave |
+| --- | --- | --- |
+| Exactitud de intención primaria, 72 casos | 0.847 | 0.639 |
+| Macro F1 | 0.847 | 0.636 |
+
+Con el umbral ya fijado en 0.6, 58/72 casos (80.6%) superan el umbral y 53/58 (91.4%)
+tienen la intención primaria candidata correcta. Dos predicciones por encima del
+umbral son `unsupported_unclear`, que la política no automatiza: 56/72 son elegibles
+por clase y umbral antes de las guardas nuevas, y 54/56 coinciden con alguna intención
+candidata. Esa compatibilidad tampoco mide seguridad de ejecución. Por idioma: exactitud es 0.833 en
+español y 0.861 en portugués (36 casos cada uno). Son diagnósticos sintéticos con
+etiquetas no revisadas, no promesas de calidad ni autorización automática.
+Los cinco errores por encima del umbral muestran por qué la propuesta y la evidencia
+se mantienen separadas y las acciones requieren confirmación explícita.
+
+La carga valida taxonomía, dimensiones, índices y pesos numéricos finitos antes de
+servir; un artefacto inválido falla al arrancar, sin fallback silencioso al stub.
 
 ## Reproducir
 
