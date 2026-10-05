@@ -86,6 +86,10 @@ fields and invalid arguments are rejected before calling the dispatcher. Invalid
 disagree with the conversation language are also rejected. The
 backend still revalidates ownership and eligibility through existing capabilities.
 
+`BCK_CONVERSATION_ADAPTER=classifier` enables the trained intent classifier, descriptor
+`intent-classifier`, version `intent-tfidf-lr-v1`, mode `injected`; see
+[the intent router](ml-intent-router.md).
+
 `BCK_CONVERSATION_ADAPTER=disabled` is the default: turns persist an
 `adapter_unavailable` error, with no simulated provider success. For an explicit
 engineering demonstration set `BCK_CONVERSATION_ADAPTER=stub` with the existing
