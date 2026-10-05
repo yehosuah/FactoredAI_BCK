@@ -77,3 +77,30 @@ def expected_calibration_error(confidences, correct, bins=10):
 def rule_of_three(n):
     """Approximate 95% upper bound on a rate after zero failures in n cases."""
     return 3 / n
+
+
+THRESHOLDS = tuple(round(0.05 * i, 2) for i in range(2, 20))
+
+
+def coverage_curve(confidences, correct, thresholds=THRESHOLDS):
+    """Share of cases automated at each threshold, and accuracy on that share."""
+    curve = []
+    for t in thresholds:
+        kept = [ok for c, ok in zip(confidences, correct, strict=True) if c >= t]
+        curve.append(
+            {
+                "threshold": t,
+                "coverage": len(kept) / len(confidences),
+                "accuracy": sum(kept) / len(kept) if kept else None,
+                "automated": len(kept),
+            }
+        )
+    return curve
+
+
+def choose_threshold(confidences, correct, target, thresholds=THRESHOLDS):
+    """Lowest threshold whose automated accuracy meets the target; most coverage wins."""
+    for point in coverage_curve(confidences, correct, thresholds):
+        if point["accuracy"] is not None and point["accuracy"] >= target:
+            return point["threshold"]
+    return None

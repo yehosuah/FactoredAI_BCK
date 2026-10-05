@@ -4,6 +4,8 @@ from factored_bck.intent.baseline import predict_keyword
 from factored_bck.intent.metrics import (
     accuracy,
     bootstrap_interval,
+    choose_threshold,
+    coverage_curve,
     expected_calibration_error,
     gold_primary,
     macro_f1,
@@ -71,3 +73,16 @@ def test_rule_of_three():
 )
 def test_keyword_baseline(text, label):
     assert predict_keyword(text) == label
+
+
+def test_coverage_curve_and_threshold_choice():
+    confidences = [0.95, 0.9, 0.8, 0.6, 0.4]
+    correct = [True, True, True, False, False]
+    curve = coverage_curve(confidences, correct, thresholds=(0.5, 0.7))
+    assert curve == [
+        {"threshold": 0.5, "coverage": 0.8, "accuracy": 0.75, "automated": 4},
+        {"threshold": 0.7, "coverage": 0.6, "accuracy": 1.0, "automated": 3},
+    ]
+    assert choose_threshold(confidences, correct, target=0.9, thresholds=(0.5, 0.7)) == 0.7
+    assert choose_threshold(confidences, correct, target=0.7, thresholds=(0.5, 0.7)) == 0.5
+    assert choose_threshold([0.6], [False], target=0.9, thresholds=(0.5,)) is None
